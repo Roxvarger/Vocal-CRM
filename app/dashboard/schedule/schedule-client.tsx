@@ -126,6 +126,28 @@ function bookingLabel(b: Booking): string {
   return `${b.teacher?.full_name ?? "?"} → ${b.student?.full_name ?? "?"}`;
 }
 
+// Цвет карточки занятия — по кабинету (чтобы было видно, где какой кабинет,
+// одним взглядом на расписание). Названия кабинетов заданы вами в базе, поэтому
+// сравниваем по вхождению подстроки — так это переживёт лёгкие изменения
+// регистра или окончаний в названии.
+function roomColorClasses(roomName: string | null | undefined, isRental: boolean): string {
+  const name = (roomName || "").toLowerCase();
+  let base = "border-slate-200 bg-white text-slate-700";
+  if (name.includes("желт")) {
+    base = "border-amber-200 bg-amber-50 text-amber-800";
+  } else if (name.includes("син")) {
+    base = "border-sky-200 bg-sky-50 text-sky-800";
+  } else if (name.includes("актер") || name.includes("актёр")) {
+    base = "border-pink-200 bg-pink-50 text-pink-800";
+  }
+  // Аренду дополнительно подчёркиваем пунктирной рамкой — цвет кабинета сохраняется,
+  // но видно, что это не обычное занятие студии.
+  if (isRental) {
+    base += " border-dashed border-2 border-purple-300";
+  }
+  return base;
+}
+
 // ---------- Раскладка "Шкала времени": показывает реальные промежутки между занятиями ----------
 // Рабочие часы студии для этого режима — 09:00–22:00. Все занятия за пределами
 // этого окна всё равно будут показаны (прижаты к краю), просто не по правильному месту.
@@ -360,6 +382,9 @@ export default function ScheduleClient({
 
   return (
     <div>
+      {/* Шапка с офисом, неделей и фильтрами "прилипает" к верху экрана при прокрутке —
+          так расписание можно листать вниз, не теряя переключатели из виду. */}
+      <div className="sticky top-0 z-20 -mx-4 bg-slate-50 px-4 pb-1 pt-2 sm:-mx-0 sm:px-0 sm:pt-0">
       {/* Переключатель офиса */}
       <div className="mb-4 flex flex-wrap gap-2">
         {locations.map((loc) => (
@@ -463,6 +488,7 @@ export default function ScheduleClient({
           </span>
         )}
       </div>
+      </div>
 
       {loadError && (
         <p className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
@@ -506,20 +532,26 @@ export default function ScheduleClient({
               ) : layoutMode === "list" ? (
                 <div className="space-y-2">
                   {dayBookings.map((b) => (
-                    <div key={b.id} className="rounded-lg border border-slate-200 p-2 text-xs">
-                      <div className="flex items-center gap-1 font-medium text-slate-700">
+                    <div
+                      key={b.id}
+                      className={`rounded-lg border p-2 text-xs ${roomColorClasses(
+                        b.room?.name,
+                        b.is_rental
+                      )}`}
+                    >
+                      <div className="flex items-center gap-1 font-medium">
                         {formatTime(b.starts_at)}–{formatTime(b.ends_at)} · {b.room?.name ?? "?"}
                         {b.lessons_charge === 2 && (
-                          <span className="rounded bg-amber-100 px-1 text-[10px] font-semibold text-amber-700">
+                          <span className="rounded bg-white/70 px-1 text-[10px] font-semibold">
                             ×2
                           </span>
                         )}
                       </div>
-                      <div className="text-slate-500">{bookingLabel(b)}</div>
+                      <div className="opacity-80">{bookingLabel(b)}</div>
                       {canCreate && (
                         <button
                           onClick={() => handleCancel(b.id)}
-                          className="mt-1 text-red-500 hover:underline"
+                          className="mt-1 text-red-600 hover:underline"
                         >
                           Отменить
                         </button>
@@ -547,11 +579,10 @@ export default function ScheduleClient({
                       title={`${formatTime(b.starts_at)}–${formatTime(b.ends_at)} · ${
                         b.room?.name ?? "?"
                       } · ${bookingLabel(b)}${canCreate ? " (нажмите, чтобы отменить)" : ""}`}
-                      className={`absolute overflow-hidden rounded-md border p-1 text-left text-[10px] leading-tight ${
+                      className={`absolute overflow-hidden rounded-md border p-1 text-left text-[10px] leading-tight ${roomColorClasses(
+                        b.room?.name,
                         b.is_rental
-                          ? "border-purple-200 bg-purple-50 text-purple-700"
-                          : "border-indigo-200 bg-indigo-50 text-indigo-700"
-                      } ${canCreate ? "cursor-pointer hover:brightness-95" : "cursor-default"}`}
+                      )} ${canCreate ? "cursor-pointer hover:brightness-95" : "cursor-default"}`}
                       style={{
                         top,
                         height,
