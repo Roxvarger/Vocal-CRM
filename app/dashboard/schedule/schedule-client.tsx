@@ -119,7 +119,7 @@ function pillClass(active: boolean): string {
 
 function bookingLabel(b: Booking): string {
   if (b.is_rental) {
-    return `Аренда${b.rental_client_name ? " — " + b.rental_client_name : ""} (${
+    return `АРЕНДА${b.rental_client_name ? " — " + b.rental_client_name : ""} (${
       b.teacher?.full_name ?? "?"
     })`;
   }
@@ -131,7 +131,9 @@ function bookingLabel(b: Booking): string {
 // этого окна всё равно будут показаны (прижаты к краю), просто не по правильному месту.
 const TIMELINE_START_MIN = 9 * 60;
 const TIMELINE_END_MIN = 22 * 60;
-const PX_PER_MIN = 1.1;
+// 1.7 px/мин — чтобы даже самое короткое (30-минутное) занятие было достаточно
+// высоким и умещало все три строки текста (время, кабинет, имя), не обрезая их.
+const PX_PER_MIN = 1.7;
 const TIMELINE_HEIGHT = (TIMELINE_END_MIN - TIMELINE_START_MIN) * PX_PER_MIN;
 
 type LaidOutBooking = {
