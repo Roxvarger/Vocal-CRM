@@ -23,6 +23,12 @@ type Booking = {
   ends_at: string;
   status: string;
   is_single_lesson: boolean;
+  is_rental: boolean;
+  rental_client_name: string | null;
+  lessons_charge: number;
+  room_id: string | null;
+  teacher_id: string | null;
+  student_id: string | null;
   room: { name: string } | null;
   teacher: { full_name: string } | null;
   student: { full_name: string } | null;
@@ -76,6 +82,14 @@ function formatTime(iso: string): string {
   });
 }
 
+function formatTimeFromParts(startTime: string, durationMinutes: number): string {
+  const [h, m] = startTime.split(":").map(Number);
+  const totalMinutes = h * 60 + m + durationMinutes;
+  const endH = Math.floor(totalMinutes / 60) % 24;
+  const endM = totalMinutes % 60;
+  return `${String(endH).padStart(2, "0")}:${String(endM).padStart(2, "0")}`;
+}
+
 function isSameLocalDay(iso: string, day: Date): boolean {
   const d = new Date(iso);
   return (
@@ -85,7 +99,22 @@ function isSameLocalDay(iso: string, day: Date): boolean {
   );
 }
 
+// Классы для кнопок-переключателей (вида и фильтров)
+function tabClass(active: boolean): string {
+  return `rounded-full px-3 py-1.5 text-sm font-medium transition ${
+    active ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+  }`;
+}
+
+function pillClass(active: boolean): string {
+  return `rounded-full px-2.5 py-1 text-xs font-medium transition ${
+    active ? "bg-indigo-600 text-white" : "bg-slate-50 text-slate-500 hover:bg-slate-100"
+  }`;
+}
+
 // ---------- Основной компонент ----------
+
+type ViewMode = "all" | "teacher" | "room";
 
 export default function ScheduleClient({
   currentUser,
@@ -97,6 +126,9 @@ export default function ScheduleClient({
   const supabase = createClient();
   const canCreate = currentUser.role === "admin" || currentUser.role === "teacher";
   const isAdmin = currentUser.role === "admin";
+  // Разбивку по преподавателям/кабинетам показываем администратору и менеджеру —
+  // им нужно видеть занятость всей студии, а не только свои записи.
+  const canManageView = currentUser.role === "admin" || currentUser.role === "manager";
 
   const [locationId, setLocationId] = useState<string>(locations[0]?.id ?? "");
   const [weekStart, setWeekStart] = useState<Date>(() => startOfWeekMonday(new Date()));
@@ -104,10 +136,15 @@ export default function ScheduleClient({
   const [rooms, setRooms] = useState<Room[]>([]);
   const [teachers, setTeachers] = useState<PersonOption[]>([]);
   const [students, setStudents] = useState<PersonOption[]>([]);
+  const [teacherDefaultRooms, setTeacherDefaultRooms] = useState<Record<string, string>>({});
   const [loadingBookings, setLoadingBookings] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [modalDate, setModalDate] = useState<Date | null>(null);
+
+  // Режим просмотра: всё расписание / по преподавателям / по кабинетам
+  const [viewMode, setViewMode] = useState<ViewMode>("all");
+  const [viewFilterId, setViewFilterId] = useState<string>("");
 
   const weekDays = useMemo(
     () => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)),
@@ -133,7 +170,7 @@ export default function ScheduleClient({
       .then(({ data }) => setRooms(data ?? []));
   }, [locationId, supabase]);
 
-  // Подтягиваем список учеников (и преподавателей, если админ) один раз
+  // Подтягиваем список учеников (и преподавателей, если админ/менеджер) один раз
   useEffect(() => {
     supabase
       .from("profiles")
@@ -142,7 +179,7 @@ export default function ScheduleClient({
       .order("full_name")
       .then(({ data }) => setStudents(data ?? []));
 
-    if (isAdmin) {
+    if (isAdmin || canManageView) {
       supabase
         .from("profiles")
         .select("id, full_name")
@@ -150,7 +187,31 @@ export default function ScheduleClient({
         .order("full_name")
         .then(({ data }) => setTeachers(data ?? []));
     }
-  }, [supabase, isAdmin]);
+
+    // Приоритетные кабинеты преподавателей — только подсказка при создании записи,
+    // выбор кабинета всегда можно поменять вручную.
+    supabase
+      .from("teacher_profiles")
+      .select("user_id, default_room_id")
+      .then(({ data }) => {
+        const map: Record<string, string> = {};
+        (data ?? []).forEach((row: { user_id: string; default_room_id: string | null }) => {
+          if (row.default_room_id) map[row.user_id] = row.default_room_id;
+        });
+        setTeacherDefaultRooms(map);
+      });
+  }, [supabase, isAdmin, canManageView]);
+
+  // Когда переключаем режим просмотра — выбираем первый элемент списка по умолчанию
+  useEffect(() => {
+    if (viewMode === "teacher") {
+      setViewFilterId((prev) => (teachers.some((t) => t.id === prev) ? prev : teachers[0]?.id ?? ""));
+    } else if (viewMode === "room") {
+      setViewFilterId((prev) => (rooms.some((r) => r.id === prev) ? prev : rooms[0]?.id ?? ""));
+    } else {
+      setViewFilterId("");
+    }
+  }, [viewMode, teachers, rooms]);
 
   // Подтягиваем записи на выбранную неделю в выбранном офисе
   useEffect(() => {
@@ -163,7 +224,7 @@ export default function ScheduleClient({
     supabase
       .from("bookings")
       .select(
-        "id, starts_at, ends_at, status, is_single_lesson, room:room_id(name), teacher:teacher_id(full_name), student:student_id(full_name)"
+        "id, starts_at, ends_at, status, is_single_lesson, is_rental, rental_client_name, lessons_charge, room_id, teacher_id, student_id, room:room_id(name), teacher:teacher_id(full_name), student:student_id(full_name)"
       )
       .eq("location_id", locationId)
       .eq("status", "scheduled")
@@ -187,7 +248,7 @@ export default function ScheduleClient({
     const { data } = await supabase
       .from("bookings")
       .select(
-        "id, starts_at, ends_at, status, is_single_lesson, room:room_id(name), teacher:teacher_id(full_name), student:student_id(full_name)"
+        "id, starts_at, ends_at, status, is_single_lesson, is_rental, rental_client_name, lessons_charge, room_id, teacher_id, student_id, room:room_id(name), teacher:teacher_id(full_name), student:student_id(full_name)"
       )
       .eq("location_id", locationId)
       .eq("status", "scheduled")
@@ -261,20 +322,74 @@ export default function ScheduleClient({
         </button>
       </div>
 
+      {/* Переключатель режима просмотра: всё / по преподавателям / по кабинетам */}
+      {canManageView && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-2xl bg-white p-3 shadow-md">
+          <span className="mr-1 text-xs font-medium text-slate-500">Показать:</span>
+          <button className={tabClass(viewMode === "all")} onClick={() => setViewMode("all")}>
+            Всё расписание
+          </button>
+          <button className={tabClass(viewMode === "teacher")} onClick={() => setViewMode("teacher")}>
+            По преподавателям
+          </button>
+          <button className={tabClass(viewMode === "room")} onClick={() => setViewMode("room")}>
+            По кабинетам
+          </button>
+
+          {viewMode === "teacher" && (
+            <div className="ml-2 flex flex-wrap gap-1.5 border-l border-slate-200 pl-3">
+              {teachers.length === 0 && (
+                <span className="text-xs text-slate-400">Нет преподавателей</span>
+              )}
+              {teachers.map((t) => (
+                <button
+                  key={t.id}
+                  className={pillClass(viewFilterId === t.id)}
+                  onClick={() => setViewFilterId(t.id)}
+                >
+                  {t.full_name}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {viewMode === "room" && (
+            <div className="ml-2 flex flex-wrap gap-1.5 border-l border-slate-200 pl-3">
+              {rooms.length === 0 && <span className="text-xs text-slate-400">Нет кабинетов</span>}
+              {rooms.map((r) => (
+                <button
+                  key={r.id}
+                  className={pillClass(viewFilterId === r.id)}
+                  onClick={() => setViewFilterId(r.id)}
+                >
+                  {r.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {loadError && (
         <p className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
           {loadError}
         </p>
       )}
 
-      {/* Неделя: 7 карточек-дней */}
-      <div className="flex gap-3 overflow-x-auto pb-2">
+      {/* Неделя: 7 карточек-дней. Сетка сама переносит карточки на следующую строку,
+          если экран узкий — так все 7 дней всегда видны без прокрутки вбок. */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
         {weekDays.map((day, idx) => {
-          const dayBookings = bookings.filter((b) => isSameLocalDay(b.starts_at, day));
+          const dayBookings = bookings.filter((b) => {
+            if (!isSameLocalDay(b.starts_at, day)) return false;
+            if (viewMode === "teacher" && viewFilterId) return b.teacher_id === viewFilterId;
+            if (viewMode === "room" && viewFilterId) return b.room_id === viewFilterId;
+            return true;
+          });
           return (
             <div
               key={idx}
-              className="min-w-[220px] flex-1 rounded-2xl bg-white p-3 shadow-md"
+              className="rounded-2xl bg-white p-3 shadow-md"
             >
               <div className="mb-2 flex items-center justify-between">
                 <span className="text-sm font-semibold text-slate-700">
@@ -294,7 +409,9 @@ export default function ScheduleClient({
               {loadingBookings ? (
                 <p className="text-xs text-slate-400">Загрузка…</p>
               ) : dayBookings.length === 0 ? (
-                <p className="text-xs text-slate-400">Нет занятий</p>
+                <p className="text-xs text-slate-400">
+                  {viewMode === "room" && viewFilterId ? "Кабинет свободен весь день" : "Нет занятий"}
+                </p>
               ) : (
                 <div className="space-y-2">
                   {dayBookings.map((b) => (
@@ -302,12 +419,21 @@ export default function ScheduleClient({
                       key={b.id}
                       className="rounded-lg border border-slate-200 p-2 text-xs"
                     >
-                      <div className="font-medium text-slate-700">
+                      <div className="flex items-center gap-1 font-medium text-slate-700">
                         {formatTime(b.starts_at)}–{formatTime(b.ends_at)} ·{" "}
                         {b.room?.name ?? "?"}
+                        {b.lessons_charge === 2 && (
+                          <span className="rounded bg-amber-100 px-1 text-[10px] font-semibold text-amber-700">
+                            ×2
+                          </span>
+                        )}
                       </div>
                       <div className="text-slate-500">
-                        {b.teacher?.full_name ?? "?"} → {b.student?.full_name ?? "?"}
+                        {b.is_rental
+                          ? `Аренда${b.rental_client_name ? " — " + b.rental_client_name : ""} (${
+                              b.teacher?.full_name ?? "?"
+                            })`
+                          : `${b.teacher?.full_name ?? "?"} → ${b.student?.full_name ?? "?"}`}
                       </div>
                       {canCreate && (
                         <button
@@ -334,6 +460,7 @@ export default function ScheduleClient({
           rooms={rooms}
           teachers={isAdmin ? teachers : [{ id: currentUser.id, full_name: currentUser.fullName }]}
           students={students}
+          teacherDefaultRooms={teacherDefaultRooms}
           onClose={() => setModalDate(null)}
           onCreated={() => {
             setModalDate(null);
@@ -347,6 +474,8 @@ export default function ScheduleClient({
 
 // ---------- Модальное окно создания записи ----------
 
+type BookingType = "subscription" | "single" | "rental";
+
 function BookingModal({
   date,
   locationId,
@@ -354,6 +483,7 @@ function BookingModal({
   rooms,
   teachers,
   students,
+  teacherDefaultRooms,
   onClose,
   onCreated,
 }: {
@@ -363,25 +493,41 @@ function BookingModal({
   rooms: Room[];
   teachers: PersonOption[];
   students: PersonOption[];
+  teacherDefaultRooms: Record<string, string>;
   onClose: () => void;
   onCreated: () => void;
 }) {
   const supabase = createClient();
   const isAdmin = currentUser.role === "admin";
 
-  const [roomId, setRoomId] = useState(rooms[0]?.id ?? "");
-  const [teacherId, setTeacherId] = useState(
-    isAdmin ? teachers[0]?.id ?? "" : currentUser.id
+  const initialTeacherId = isAdmin ? teachers[0]?.id ?? "" : currentUser.id;
+
+  const [roomId, setRoomId] = useState(
+    teacherDefaultRooms[initialTeacherId] ?? rooms[0]?.id ?? ""
   );
+  const [teacherId, setTeacherId] = useState(initialTeacherId);
   const [studentId, setStudentId] = useState(students[0]?.id ?? "");
   const [startTime, setStartTime] = useState("10:00");
-  const [endTime, setEndTime] = useState("11:00");
-  const [type, setType] = useState<"subscription" | "single">("subscription");
+  const [durationMinutes, setDurationMinutes] = useState(60);
+  const [type, setType] = useState<BookingType>("subscription");
+  const [isDouble, setIsDouble] = useState(false);
   const [price, setPrice] = useState("1500");
+  const [rentalClientName, setRentalClientName] = useState("");
   const [studentSubs, setStudentSubs] = useState<StudentSubscription[]>([]);
   const [subscriptionId, setSubscriptionId] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // При выборе преподавателя — подставляем его приоритетный кабинет как подсказку.
+  // Кабинет остаётся полностью редактируемым: это просто удобный вариант по умолчанию,
+  // потому что преподаватели закреплены за кабинетами не жёстко.
+  useEffect(() => {
+    const suggested = teacherDefaultRooms[teacherId];
+    if (suggested && rooms.some((r) => r.id === suggested)) {
+      setRoomId(suggested);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teacherId]);
 
   // При смене ученика или типа "по абонементу" — подгружаем его активные абонементы в этом офисе
   useEffect(() => {
@@ -408,8 +554,12 @@ function BookingModal({
     e.preventDefault();
     setError(null);
 
-    if (!roomId || !teacherId || !studentId) {
+    if (!roomId || !teacherId) {
       setError("Заполните все поля");
+      return;
+    }
+    if (type !== "rental" && !studentId) {
+      setError("Выберите ученика");
       return;
     }
     if (type === "subscription" && !subscriptionId) {
@@ -419,12 +569,7 @@ function BookingModal({
 
     const dateStr = formatDateInput(date);
     const startsAt = new Date(`${dateStr}T${startTime}:00`);
-    const endsAt = new Date(`${dateStr}T${endTime}:00`);
-
-    if (endsAt <= startsAt) {
-      setError("Время окончания должно быть позже времени начала");
-      return;
-    }
+    const endsAt = new Date(startsAt.getTime() + durationMinutes * 60 * 1000);
 
     setSubmitting(true);
 
@@ -432,10 +577,13 @@ function BookingModal({
       location_id: locationId,
       room_id: roomId,
       teacher_id: teacherId,
-      student_id: studentId,
+      student_id: type === "rental" ? null : studentId,
       subscription_id: type === "subscription" ? subscriptionId : null,
       is_single_lesson: type === "single",
       single_lesson_price: type === "single" ? Number(price) : null,
+      is_rental: type === "rental",
+      rental_client_name: type === "rental" ? rentalClientName || null : null,
+      lessons_charge: type === "rental" ? 1 : isDouble ? 2 : 1,
       starts_at: startsAt.toISOString(),
       ends_at: endsAt.toISOString(),
       created_by: currentUser.id,
@@ -482,17 +630,26 @@ function BookingModal({
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-600">
-                Окончание
+                Длительность
               </label>
-              <input
-                type="time"
-                value={endTime}
-                onChange={(e) => setEndTime(e.target.value)}
+              <select
+                value={durationMinutes}
+                onChange={(e) => setDurationMinutes(Number(e.target.value))}
                 className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-                required
-              />
+              >
+                <option value={30}>30 минут</option>
+                <option value={45}>45 минут</option>
+                <option value={60}>60 минут</option>
+                <option value={90}>90 минут</option>
+                <option value={120}>120 минут</option>
+              </select>
             </div>
           </div>
+
+          <p className="text-xs text-slate-400">
+            Занятие пройдёт с {startTime} до{" "}
+            {formatTimeFromParts(startTime, durationMinutes)}
+          </p>
 
           <div>
             <label className="mb-1 block text-xs font-medium text-slate-600">Кабинет</label>
@@ -531,27 +688,10 @@ function BookingModal({
           </div>
 
           <div>
-            <label className="mb-1 block text-xs font-medium text-slate-600">Ученик</label>
-            <select
-              value={studentId}
-              onChange={(e) => setStudentId(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-              required
-            >
-              {students.length === 0 && <option value="">Нет учеников в системе</option>}
-              {students.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.full_name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
             <label className="mb-1 block text-xs font-medium text-slate-600">
               Тип занятия
             </label>
-            <div className="flex gap-3 text-sm">
+            <div className="flex flex-wrap gap-3 text-sm">
               <label className="flex items-center gap-1">
                 <input
                   type="radio"
@@ -568,10 +708,65 @@ function BookingModal({
                 />
                 Разовое
               </label>
+              <label className="flex items-center gap-1">
+                <input
+                  type="radio"
+                  checked={type === "rental"}
+                  onChange={() => setType("rental")}
+                />
+                Аренда
+              </label>
             </div>
           </div>
 
-          {type === "subscription" ? (
+          {type === "rental" ? (
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-600">
+                Имя клиента (необязательно)
+              </label>
+              <input
+                type="text"
+                value={rentalClientName}
+                onChange={(e) => setRentalClientName(e.target.value)}
+                placeholder="Личный ученик преподавателя"
+                className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                Аренда — это личные ученики преподавателя, студия не ведёт их учёт, но получает
+                оплату за аренду кабинета.
+              </p>
+            </div>
+          ) : (
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-600">Ученик</label>
+              <select
+                value={studentId}
+                onChange={(e) => setStudentId(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                required
+              >
+                {students.length === 0 && <option value="">Нет учеников в системе</option>}
+                {students.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.full_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {type !== "rental" && (
+            <label className="flex items-center gap-2 text-sm text-slate-600">
+              <input
+                type="checkbox"
+                checked={isDouble}
+                onChange={(e) => setIsDouble(e.target.checked)}
+              />
+              Сдвоенное занятие (списывается 2 занятия)
+            </label>
+          )}
+
+          {type === "subscription" && (
             studentSubs.length > 0 ? (
               <div>
                 <label className="mb-1 block text-xs font-medium text-slate-600">
@@ -597,7 +792,9 @@ function BookingModal({
                 «Разовое занятие» или сначала оформите абонемент.
               </p>
             )
-          ) : (
+          )}
+
+          {type === "single" && (
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-600">
                 Стоимость занятия (₽)
