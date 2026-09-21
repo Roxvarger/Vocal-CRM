@@ -16,7 +16,10 @@ type CurrentUser = {
 type Location = { id: string; name: string };
 type Room = { id: string; name: string };
 type PersonOption = { id: string; full_name: string };
-type PersonalRate = { id: string; name: string; price: number; teacher_amount: number };
+// Персональные условия теперь привязаны к конкретному ученику (а не выбираются
+// из общего списка тарифов) — если ученик есть в этой таблице, все его занятия
+// автоматически идут как "Персональное".
+type PersonalRate = { id: string; student_id: string; price: number; teacher_amount: number };
 type LessonSubject = { id: string; name: string };
 
 type BookingKind = "subscription" | "single" | "trial" | "rental" | "personal";
@@ -46,7 +49,6 @@ type Booking = {
   room: { name: string } | null;
   teacher: { full_name: string } | null;
   student: { full_name: string } | null;
-  personal_rate: { name: string } | null;
   subject: { name: string } | null;
 };
 
@@ -272,7 +274,7 @@ export default function ScheduleClient({
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("list");
 
   const BOOKING_SELECT =
-    "id, starts_at, ends_at, status, booking_kind, rental_client_name, lessons_charge, room_id, teacher_id, student_id, subscription_id, personal_rate_id, subject_id, room:room_id(name), teacher:teacher_id(full_name), student:student_id(full_name), personal_rate:personal_rate_id(name), subject:subject_id(name)";
+    "id, starts_at, ends_at, status, booking_kind, rental_client_name, lessons_charge, room_id, teacher_id, student_id, subscription_id, personal_rate_id, subject_id, room:room_id(name), teacher:teacher_id(full_name), student:student_id(full_name), subject:subject_id(name)";
 
   const weekDays = useMemo(
     () => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)),
@@ -331,9 +333,8 @@ export default function ScheduleClient({
 
     supabase
       .from("personal_lesson_rates")
-      .select("id, name, price, teacher_amount")
+      .select("id, student_id, price, teacher_amount")
       .eq("is_active", true)
-      .order("name")
       .then(({ data }) => setPersonalRates(data ?? []));
 
     supabase
@@ -749,12 +750,6 @@ function BookingDetailModal({
               {booking.subject.name}
             </p>
           )}
-          {booking.booking_kind === "personal" && booking.personal_rate?.name && (
-            <p>
-              <span className="text-slate-400">Тариф: </span>
-              {booking.personal_rate.name}
-            </p>
-          )}
         </div>
 
         <div className="mt-5 flex gap-2">
@@ -832,6 +827,15 @@ function BookingModal({
     isEdit ? mode.booking.student_id ?? "" : students[0]?.id ?? ""
   );
   const [subjectId, setSubjectId] = useState(isEdit ? mode.booking.subject_id ?? "" : "");
+
+  // По умолчанию для новой записи подставляем направление "Вокал" (как только справочник загрузится)
+  useEffect(() => {
+    if (isEdit) return;
+    if (subjectId) return;
+    const vocal = subjects.find((s) => s.name.toLowerCase() === "вокал");
+    if (vocal) setSubjectId(vocal.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subjects]);
   const [startTime, setStartTime] = useState(
     isEdit ? formatTime(mode.booking.starts_at) : mode.initialStart ?? "10:00"
   );
@@ -846,9 +850,6 @@ function BookingModal({
   const [kind, setKind] = useState<BookingKind>(isEdit ? mode.booking.booking_kind : "single");
   const [rentalClientName, setRentalClientName] = useState(
     isEdit ? mode.booking.rental_client_name ?? "" : ""
-  );
-  const [personalRateId, setPersonalRateId] = useState(
-    isEdit ? mode.booking.personal_rate_id ?? "" : ""
   );
   const [studentSubs, setStudentSubs] = useState<StudentSubscription[]>([]);
   const [subscriptionId, setSubscriptionId] = useState<string>(
@@ -899,6 +900,21 @@ function BookingModal({
 
   const subscriptionAvailable = studentSubs.length > 0;
 
+  // Персональные условия закреплены за конкретным учеником администратором отдельно
+  // (не выбираются вручную здесь). Если у выбранного ученика такие условия есть —
+  // тип занятия автоматически становится "Персональное", и другие варианты скрываются.
+  const studentPersonalRate = personalRates.find((r) => r.student_id === studentId);
+
+  useEffect(() => {
+    setKind((prev) => {
+      if (prev === "rental") return prev;
+      if (studentPersonalRate) return "personal";
+      if (prev === "personal") return "single";
+      return prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [studentPersonalRate]);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -911,12 +927,16 @@ function BookingModal({
       setError("Выберите обучающегося");
       return;
     }
+    if (!subjectId) {
+      setError("Выберите направление занятия");
+      return;
+    }
     if (kind === "subscription" && (!subscriptionId || studentSubs.length === 0)) {
       setError("У обучающегося нет активного абонемента — выберите другой тип занятия");
       return;
     }
-    if (kind === "personal" && !personalRateId) {
-      setError("Выберите персональный тариф из справочника");
+    if (kind === "personal" && !studentPersonalRate) {
+      setError("У этого обучающегося больше нет персональных условий — обновите страницу");
       return;
     }
 
@@ -931,7 +951,7 @@ function BookingModal({
       is_single_lesson: kind !== "subscription" && kind !== "rental",
       is_rental: kind === "rental",
       rental_client_name: kind === "rental" ? rentalClientName || null : null,
-      personal_rate_id: kind === "personal" ? personalRateId : null,
+      personal_rate_id: kind === "personal" ? studentPersonalRate?.id ?? null : null,
       single_lesson_price: null as number | null,
       lessons_charge: 1,
       created_by: currentUser.id,
@@ -1121,15 +1141,16 @@ function BookingModal({
           )}
 
           <div>
-            <label className="mb-1 block text-xs font-medium text-slate-600">
-              Направление (необязательно)
-            </label>
+            <label className="mb-1 block text-xs font-medium text-slate-600">Направление</label>
             <select
               value={subjectId}
               onChange={(e) => setSubjectId(e.target.value)}
               className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+              required
             >
-              <option value="">Не указано</option>
+              <option value="" disabled>
+                {subjects.length === 0 ? "Нет направлений в справочнике" : "Выберите направление"}
+              </option>
               {subjects.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
@@ -1138,38 +1159,42 @@ function BookingModal({
             </select>
           </div>
 
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-600">Тип занятия</label>
-            <div className="flex flex-col gap-1.5 text-sm">
-              <label
-                className={`flex items-center gap-2 ${!subscriptionAvailable ? "text-slate-300" : ""}`}
-              >
-                <input
-                  type="radio"
-                  checked={kind === "subscription"}
-                  disabled={!subscriptionAvailable}
-                  onChange={() => setKind("subscription")}
-                />
-                Из абонемента {!subscriptionAvailable && "(нет активного абонемента)"}
-              </label>
-              <label className="flex items-center gap-2">
-                <input type="radio" checked={kind === "single"} onChange={() => setKind("single")} />
-                Разовое занятие
-              </label>
-              <label className="flex items-center gap-2">
-                <input type="radio" checked={kind === "trial"} onChange={() => setKind("trial")} />
-                Пробное занятие
-              </label>
-              <label className="flex items-center gap-2">
-                <input type="radio" checked={kind === "rental"} onChange={() => setKind("rental")} />
-                Аренда
-              </label>
-              <label className="flex items-center gap-2">
-                <input type="radio" checked={kind === "personal"} onChange={() => setKind("personal")} />
-                Персональное
-              </label>
+          {kind !== "rental" && studentPersonalRate ? (
+            <p className="rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-700">
+              Тип занятия: <strong>Персональное</strong> — у этого обучающегося персональные условия,
+              назначенные администратором. Чтобы поставить другой тип, сначала снимите с него
+              персональные условия в справочнике.
+            </p>
+          ) : (
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-600">Тип занятия</label>
+              <div className="flex flex-col gap-1.5 text-sm">
+                <label
+                  className={`flex items-center gap-2 ${!subscriptionAvailable ? "text-slate-300" : ""}`}
+                >
+                  <input
+                    type="radio"
+                    checked={kind === "subscription"}
+                    disabled={!subscriptionAvailable}
+                    onChange={() => setKind("subscription")}
+                  />
+                  Из абонемента {!subscriptionAvailable && "(нет активного абонемента)"}
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="radio" checked={kind === "single"} onChange={() => setKind("single")} />
+                  Разовое занятие
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="radio" checked={kind === "trial"} onChange={() => setKind("trial")} />
+                  Пробное занятие
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="radio" checked={kind === "rental"} onChange={() => setKind("rental")} />
+                  Аренда
+                </label>
+              </div>
             </div>
-          </div>
+          )}
 
           {kind === "subscription" &&
             (subscriptionAvailable ? (
@@ -1194,31 +1219,6 @@ function BookingModal({
               </p>
             ))}
 
-          {kind === "personal" &&
-            (personalRates.length > 0 ? (
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-600">
-                  Персональный тариф
-                </label>
-                <select
-                  value={personalRateId}
-                  onChange={(e) => setPersonalRateId(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-                  required
-                >
-                  <option value="">Выберите тариф</option>
-                  {personalRates.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name} — {r.price} ₽
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ) : (
-              <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
-                Справочник персональных тарифов пока пуст — сначала добавьте туда хотя бы один тариф.
-              </p>
-            ))}
 
           {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
 
