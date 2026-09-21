@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import LogoutButton from "./logout-button";
 
@@ -49,9 +50,21 @@ export default async function DashboardPage() {
           <LogoutButton />
         </div>
 
-        <div className="mt-6 rounded-2xl bg-white p-6 text-slate-500 shadow-md">
-          Здесь скоро появится расписание, ученики и абонементы — мы будем
-          добавлять разделы по одному, шаг за шагом.
+        <div className="mt-6 grid gap-3 sm:grid-cols-2">
+          <Link
+            href="/dashboard/schedule"
+            className="rounded-2xl bg-white p-6 shadow-md transition hover:shadow-lg"
+          >
+            <h2 className="font-semibold text-slate-800">Расписание</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Записи на занятия по неделям, с защитой от накладок
+            </p>
+          </Link>
+
+          <div className="rounded-2xl bg-white p-6 text-slate-400 shadow-md">
+            <h2 className="font-semibold">Ученики и абонементы</h2>
+            <p className="mt-1 text-sm">Скоро появится здесь</p>
+          </div>
         </div>
       </div>
     </main>

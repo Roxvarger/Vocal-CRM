@@ -6,9 +6,16 @@
 2. В Vercel: New Project → выберите этот репозиторий.
 3. В настройках проекта Vercel (Settings → Environment Variables) добавьте:
    - `NEXT_PUBLIC_SUPABASE_URL` — адрес вашего проекта Supabase
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY` — публичный (anon) ключ Supabase
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY` — публичный (anon/publishable) ключ Supabase
 
-   Оба значения найдёте в Supabase: Project Settings → API.
+   Оба значения найдёте в Supabase: Project Settings → API Keys.
 4. Нажмите Deploy.
 
-Файл `.env.local.example` — это только образец для справки, он не используется Vercel напрямую и никогда не должен содержать настоящие ключи в загруженном на GitHub виде.
+## SQL, который нужно выполнить в Supabase (SQL Editor), по шагам
+
+Каждый шаг соответствует определённому этапу разработки — см. историю переписки с Claude.
+Последний добавленный этап — модуль расписания (`schedule`), для него дополнительно нужны
+правила безопасности, разрешающие преподавателям видеть список учеников и создавать свои записи.
+
+Файл `.env.local.example` — образец для справки, не используется Vercel напрямую и никогда не
+должен содержать настоящие ключи в загруженном на GitHub виде.
