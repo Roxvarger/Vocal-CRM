@@ -82,6 +82,11 @@ function formatTime(iso: string): string {
   });
 }
 
+function minutesSinceMidnight(iso: string): number {
+  const d = new Date(iso);
+  return d.getHours() * 60 + d.getMinutes();
+}
+
 function formatTimeFromParts(startTime: string, durationMinutes: number): string {
   const [h, m] = startTime.split(":").map(Number);
   const totalMinutes = h * 60 + m + durationMinutes;
@@ -112,9 +117,74 @@ function pillClass(active: boolean): string {
   }`;
 }
 
+function bookingLabel(b: Booking): string {
+  if (b.is_rental) {
+    return `Аренда${b.rental_client_name ? " — " + b.rental_client_name : ""} (${
+      b.teacher?.full_name ?? "?"
+    })`;
+  }
+  return `${b.teacher?.full_name ?? "?"} → ${b.student?.full_name ?? "?"}`;
+}
+
+// ---------- Раскладка "Шкала времени": показывает реальные промежутки между занятиями ----------
+// Рабочие часы студии для этого режима — 09:00–22:00. Все занятия за пределами
+// этого окна всё равно будут показаны (прижаты к краю), просто не по правильному месту.
+const TIMELINE_START_MIN = 9 * 60;
+const TIMELINE_END_MIN = 22 * 60;
+const PX_PER_MIN = 1.1;
+const TIMELINE_HEIGHT = (TIMELINE_END_MIN - TIMELINE_START_MIN) * PX_PER_MIN;
+
+type LaidOutBooking = {
+  booking: Booking;
+  top: number;
+  height: number;
+  laneIndex: number;
+  laneCount: number;
+};
+
+function layoutDayBookings(dayBookings: Booking[]): LaidOutBooking[] {
+  const sorted = [...dayBookings].sort(
+    (a, b) => minutesSinceMidnight(a.starts_at) - minutesSinceMidnight(b.starts_at)
+  );
+
+  // Жадно раскладываем занятия по "дорожкам": если время пересекается с уже
+  // занятой дорожкой — открываем новую. Так параллельные занятия (разные
+  // преподаватели/кабинеты в одно время) не накладываются друг на друга визуально.
+  const laneEnds: number[] = [];
+  const withLane = sorted.map((b) => {
+    const start = minutesSinceMidnight(b.starts_at);
+    let end = minutesSinceMidnight(b.ends_at);
+    if (end <= start) end = start + 15; // страховка от занятий через полночь
+    let lane = laneEnds.findIndex((laneEnd) => laneEnd <= start);
+    if (lane === -1) {
+      lane = laneEnds.length;
+      laneEnds.push(end);
+    } else {
+      laneEnds[lane] = end;
+    }
+    return { booking: b, start, end, lane };
+  });
+
+  const laneCount = Math.max(1, laneEnds.length);
+
+  return withLane.map(({ booking, start, end, lane }) => {
+    const clampedStart = Math.min(Math.max(start, TIMELINE_START_MIN), TIMELINE_END_MIN);
+    const clampedEnd = Math.min(Math.max(end, TIMELINE_START_MIN), TIMELINE_END_MIN);
+    const top = (clampedStart - TIMELINE_START_MIN) * PX_PER_MIN;
+    const height = Math.max((clampedEnd - clampedStart) * PX_PER_MIN, 16);
+    return { booking, top, height, laneIndex: lane, laneCount };
+  });
+}
+
+const TIMELINE_HOURS = Array.from(
+  { length: TIMELINE_END_MIN / 60 - TIMELINE_START_MIN / 60 + 1 },
+  (_, i) => TIMELINE_START_MIN / 60 + i
+);
+
 // ---------- Основной компонент ----------
 
 type ViewMode = "all" | "teacher" | "room";
+type LayoutMode = "list" | "timeline";
 
 export default function ScheduleClient({
   currentUser,
@@ -145,6 +215,8 @@ export default function ScheduleClient({
   // Режим просмотра: всё расписание / по преподавателям / по кабинетам
   const [viewMode, setViewMode] = useState<ViewMode>("all");
   const [viewFilterId, setViewFilterId] = useState<string>("");
+  // Режим раскладки: список подряд / шкала времени с промежутками
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>("list");
 
   const weekDays = useMemo(
     () => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)),
@@ -370,6 +442,26 @@ export default function ScheduleClient({
         </div>
       )}
 
+      {/* Переключатель раскладки: список подряд / шкала времени с промежутками */}
+      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-2xl bg-white p-3 shadow-md">
+        <span className="mr-1 text-xs font-medium text-slate-500">Вид:</span>
+        <button className={tabClass(layoutMode === "list")} onClick={() => setLayoutMode("list")}>
+          Список
+        </button>
+        <button
+          className={tabClass(layoutMode === "timeline")}
+          onClick={() => setLayoutMode("timeline")}
+        >
+          Шкала времени
+        </button>
+        {layoutMode === "timeline" && (
+          <span className="text-xs text-slate-400">
+            Занятия расположены по реальному времени — пустое место между блоками = свободное окно
+            (09:00–22:00)
+          </span>
+        )}
+      </div>
+
       {loadError && (
         <p className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
           {loadError}
@@ -387,10 +479,7 @@ export default function ScheduleClient({
             return true;
           });
           return (
-            <div
-              key={idx}
-              className="rounded-2xl bg-white p-3 shadow-md"
-            >
+            <div key={idx} className="rounded-2xl bg-white p-3 shadow-md">
               <div className="mb-2 flex items-center justify-between">
                 <span className="text-sm font-semibold text-slate-700">
                   {WEEKDAY_LABELS[idx]} {formatShortDate(day)}
@@ -412,29 +501,19 @@ export default function ScheduleClient({
                 <p className="text-xs text-slate-400">
                   {viewMode === "room" && viewFilterId ? "Кабинет свободен весь день" : "Нет занятий"}
                 </p>
-              ) : (
+              ) : layoutMode === "list" ? (
                 <div className="space-y-2">
                   {dayBookings.map((b) => (
-                    <div
-                      key={b.id}
-                      className="rounded-lg border border-slate-200 p-2 text-xs"
-                    >
+                    <div key={b.id} className="rounded-lg border border-slate-200 p-2 text-xs">
                       <div className="flex items-center gap-1 font-medium text-slate-700">
-                        {formatTime(b.starts_at)}–{formatTime(b.ends_at)} ·{" "}
-                        {b.room?.name ?? "?"}
+                        {formatTime(b.starts_at)}–{formatTime(b.ends_at)} · {b.room?.name ?? "?"}
                         {b.lessons_charge === 2 && (
                           <span className="rounded bg-amber-100 px-1 text-[10px] font-semibold text-amber-700">
                             ×2
                           </span>
                         )}
                       </div>
-                      <div className="text-slate-500">
-                        {b.is_rental
-                          ? `Аренда${b.rental_client_name ? " — " + b.rental_client_name : ""} (${
-                              b.teacher?.full_name ?? "?"
-                            })`
-                          : `${b.teacher?.full_name ?? "?"} → ${b.student?.full_name ?? "?"}`}
-                      </div>
+                      <div className="text-slate-500">{bookingLabel(b)}</div>
                       {canCreate && (
                         <button
                           onClick={() => handleCancel(b.id)}
@@ -444,6 +523,47 @@ export default function ScheduleClient({
                         </button>
                       )}
                     </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="relative pl-9" style={{ height: TIMELINE_HEIGHT }}>
+                  {TIMELINE_HOURS.map((hour) => (
+                    <div
+                      key={hour}
+                      className="absolute left-9 right-0 border-t border-slate-100"
+                      style={{ top: (hour * 60 - TIMELINE_START_MIN) * PX_PER_MIN }}
+                    >
+                      <span className="absolute -left-9 -top-2 w-8 pr-1 text-right text-[10px] text-slate-300">
+                        {hour}:00
+                      </span>
+                    </div>
+                  ))}
+                  {layoutDayBookings(dayBookings).map(({ booking: b, top, height, laneIndex, laneCount }) => (
+                    <button
+                      key={b.id}
+                      onClick={() => canCreate && handleCancel(b.id)}
+                      title={`${formatTime(b.starts_at)}–${formatTime(b.ends_at)} · ${
+                        b.room?.name ?? "?"
+                      } · ${bookingLabel(b)}${canCreate ? " (нажмите, чтобы отменить)" : ""}`}
+                      className={`absolute overflow-hidden rounded-md border p-1 text-left text-[10px] leading-tight ${
+                        b.is_rental
+                          ? "border-purple-200 bg-purple-50 text-purple-700"
+                          : "border-indigo-200 bg-indigo-50 text-indigo-700"
+                      } ${canCreate ? "cursor-pointer hover:brightness-95" : "cursor-default"}`}
+                      style={{
+                        top,
+                        height,
+                        left: `${(laneIndex / laneCount) * 100}%`,
+                        width: `calc(${100 / laneCount}% - 3px)`,
+                      }}
+                    >
+                      <div className="font-semibold">
+                        {formatTime(b.starts_at)}–{formatTime(b.ends_at)}
+                        {b.lessons_charge === 2 && " ×2"}
+                      </div>
+                      <div className="truncate">{b.room?.name ?? "?"}</div>
+                      <div className="truncate">{bookingLabel(b)}</div>
+                    </button>
                   ))}
                 </div>
               )}
