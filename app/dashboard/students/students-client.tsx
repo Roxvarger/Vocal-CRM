@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 
 // ---------- Типы ----------
@@ -15,10 +16,28 @@ type CurrentUser = {
 
 type Location = { id: string; name: string };
 
+const CONTACT_CHANNEL_LABELS: Record<string, string> = {
+  phone: "Телефон (звонок/SMS)",
+  email: "Email",
+  vk: "ВКонтакте",
+  telegram: "Telegram",
+  max: "MAX",
+};
+
 type StudentProfile = {
   id: string;
   full_name: string;
   phone: string | null;
+  contact_email: string | null;
+  guardian_full_name: string | null;
+  guardian_phone: string | null;
+  birth_date: string | null;
+  notes: string | null;
+  vk_contact: string | null;
+  telegram_contact: string | null;
+  max_contact: string | null;
+  preferred_contact_channel: string | null;
+  preferred_contact_note: string | null;
   is_active: boolean;
 };
 
@@ -81,6 +100,10 @@ export default function StudentsClient({
 }) {
   const supabase = useMemo(() => createClient(), []);
   const isAdmin = currentUser.role === "admin";
+  // "Администратор" и "Главный администратор" в терминах студии — это роли manager и admin.
+  const isStaff = currentUser.role === "admin" || currentUser.role === "manager";
+
+  const [tab, setTab] = useState<"students" | "plans">("students");
 
   const [students, setStudents] = useState<StudentProfile[]>([]);
   const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
@@ -91,19 +114,24 @@ export default function StudentsClient({
 
   const [detailStudentId, setDetailStudentId] = useState<string | null>(null);
   const [addModalOpen, setAddModalOpen] = useState(false);
-  const [plansModalOpen, setPlansModalOpen] = useState(false);
   const [issueModalStudentId, setIssueModalStudentId] = useState<string | null>(null);
 
   async function loadStudents() {
     const { data } = await supabase
       .from("profiles")
-      .select("id, full_name, phone, is_active")
+      .select(
+        "id, full_name, phone, contact_email, guardian_full_name, guardian_phone, birth_date, notes, vk_contact, telegram_contact, max_contact, preferred_contact_channel, preferred_contact_note, is_active"
+      )
       .eq("role", "student")
       .order("full_name");
     setStudents(data ?? []);
   }
 
   async function loadPlans() {
+    // Тарифы доступны только администратору и менеджеру (staff) — преподаватели
+    // на эту страницу вообще не попадают, а правило безопасности в Supabase
+    // дополнительно не отдаст им эти данные, даже если запрос уйдёт напрямую.
+    if (!isStaff) return;
     const { data } = await supabase
       .from("subscription_plans")
       .select("id, name, description, lessons_count, validity_days, price, is_active")
@@ -171,94 +199,119 @@ export default function StudentsClient({
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-slate-800">Ученики и абонементы</h1>
-        <div className="flex gap-2">
-          {isAdmin && (
-            <button
-              onClick={() => setPlansModalOpen(true)}
-              className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
-            >
-              Тарифы абонементов
-            </button>
-          )}
+        {tab === "students" && (
           <button
             onClick={() => setAddModalOpen(true)}
             className="rounded-lg bg-slate-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
           >
             + Добавить ученика
           </button>
-        </div>
+        )}
       </div>
 
-      <input
-        type="text"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Поиск по имени…"
-        className="mb-4 w-full max-w-sm rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
-      />
-
-      {loading ? (
-        <p className="text-sm text-slate-400">Загрузка…</p>
-      ) : filteredStudents.length === 0 ? (
-        <p className="text-sm text-slate-400">Ученики не найдены</p>
-      ) : (
-        <div className="overflow-x-auto rounded-2xl bg-white shadow-md">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-100 text-left text-xs text-slate-400">
-                <th className="px-4 py-2 font-medium">Имя</th>
-                <th className="px-4 py-2 font-medium">Телефон</th>
-                <th className="px-4 py-2 font-medium">Абонемент</th>
-                <th className="px-4 py-2 font-medium"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredStudents.map((s) => {
-                const sub = currentSubscription(s.id);
-                const personalRate = personalRateByStudent[s.id];
-                return (
-                  <tr
-                    key={s.id}
-                    className="cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50"
-                    onClick={() => setDetailStudentId(s.id)}
-                  >
-                    <td className="whitespace-nowrap px-4 py-2.5">
-                      <span className={s.is_active ? "text-slate-800" : "text-slate-400 line-through"}>
-                        {s.full_name}
-                      </span>
-                      {!s.is_active && (
-                        <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-400">
-                          Архив
-                        </span>
-                      )}
-                      {personalRate?.is_active && (
-                        <span className="ml-2 rounded-full bg-pink-50 px-2 py-0.5 text-xs text-pink-600">
-                          Персональные условия
-                        </span>
-                      )}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-slate-500">{s.phone ?? "—"}</td>
-                    <td className="whitespace-nowrap px-4 py-2.5">
-                      {sub && isSubscriptionActive(sub) ? (
-                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700">
-                          {sub.plan?.name ?? "Абонемент"}: {sub.lessons_remaining}/{sub.lessons_total} до{" "}
-                          {formatDate(sub.expires_at)}
-                        </span>
-                      ) : (
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
-                          Нет активного абонемента
-                        </span>
-                      )}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-right text-xs text-slate-400">
-                      Открыть →
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      {isStaff && (
+        <div className="mb-4 flex gap-1 border-b border-slate-200">
+          <button
+            onClick={() => setTab("students")}
+            className={`px-3 py-2 text-sm font-medium ${
+              tab === "students"
+                ? "border-b-2 border-slate-800 text-slate-800"
+                : "text-slate-400 hover:text-slate-600"
+            }`}
+          >
+            Ученики
+          </button>
+          <button
+            onClick={() => setTab("plans")}
+            className={`px-3 py-2 text-sm font-medium ${
+              tab === "plans"
+                ? "border-b-2 border-slate-800 text-slate-800"
+                : "text-slate-400 hover:text-slate-600"
+            }`}
+          >
+            Тарифы
+          </button>
         </div>
+      )}
+
+      {tab === "students" ? (
+        <>
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Поиск по имени…"
+            className="mb-4 w-full max-w-sm rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
+          />
+
+          {loading ? (
+            <p className="text-sm text-slate-400">Загрузка…</p>
+          ) : filteredStudents.length === 0 ? (
+            <p className="text-sm text-slate-400">Ученики не найдены</p>
+          ) : (
+            <div className="overflow-x-auto rounded-2xl bg-white shadow-md">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-100 text-left text-xs text-slate-400">
+                    <th className="px-4 py-2 font-medium">Имя</th>
+                    <th className="px-4 py-2 font-medium">Телефон</th>
+                    <th className="px-4 py-2 font-medium">Абонемент</th>
+                    <th className="px-4 py-2 font-medium"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredStudents.map((s) => {
+                    const sub = currentSubscription(s.id);
+                    const personalRate = personalRateByStudent[s.id];
+                    return (
+                      <tr
+                        key={s.id}
+                        className="cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50"
+                        onClick={() => setDetailStudentId(s.id)}
+                      >
+                        <td className="whitespace-nowrap px-4 py-2.5">
+                          <span className={s.is_active ? "text-slate-800" : "text-slate-400 line-through"}>
+                            {s.full_name}
+                          </span>
+                          {!s.is_active && (
+                            <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-400">
+                              Архив
+                            </span>
+                          )}
+                          {personalRate?.is_active && (
+                            <span className="ml-2 rounded-full bg-pink-50 px-2 py-0.5 text-xs text-pink-600">
+                              Персональные условия
+                            </span>
+                          )}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-2.5 text-slate-500">{s.phone ?? "—"}</td>
+                        <td className="whitespace-nowrap px-4 py-2.5">
+                          {sub && isSubscriptionActive(sub) ? (
+                            <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700">
+                              {sub.plan?.name ?? "Абонемент"}: {sub.lessons_remaining}/{sub.lessons_total} до{" "}
+                              {formatDate(sub.expires_at)}
+                            </span>
+                          ) : (
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
+                              Нет активного абонемента
+                            </span>
+                          )}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-2.5 text-right text-xs text-slate-400">
+                          Открыть →
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      ) : (
+        isStaff && (
+          <PlansTab plans={plans} readOnly={!isAdmin} supabase={supabase} onChanged={loadPlans} />
+        )
       )}
 
       {detailStudent && (
@@ -298,15 +351,6 @@ export default function StudentsClient({
           }}
         />
       )}
-
-      {plansModalOpen && isAdmin && (
-        <PlansModal
-          plans={plans}
-          supabase={supabase}
-          onClose={() => setPlansModalOpen(false)}
-          onChanged={loadPlans}
-        />
-      )}
     </div>
   );
 }
@@ -332,8 +376,20 @@ function StudentDetailModal({
   onIssueSubscription: () => void;
   supabase: SupabaseClient;
 }) {
-  const [fullName, setFullName] = useState(student.full_name);
-  const [phone, setPhone] = useState(student.phone ?? "");
+  const [form, setForm] = useState({
+    full_name: student.full_name,
+    phone: student.phone ?? "",
+    contact_email: student.contact_email ?? "",
+    guardian_full_name: student.guardian_full_name ?? "",
+    guardian_phone: student.guardian_phone ?? "",
+    birth_date: student.birth_date ?? "",
+    notes: student.notes ?? "",
+    vk_contact: student.vk_contact ?? "",
+    telegram_contact: student.telegram_contact ?? "",
+    max_contact: student.max_contact ?? "",
+    preferred_contact_channel: student.preferred_contact_channel ?? "",
+    preferred_contact_note: student.preferred_contact_note ?? "",
+  });
   const [isActive, setIsActive] = useState(student.is_active);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -342,12 +398,30 @@ function StudentDetailModal({
   const [ratePrice, setRatePrice] = useState(personalRate?.price ?? 0);
   const [rateTeacherAmount, setRateTeacherAmount] = useState(personalRate?.teacher_amount ?? 0);
 
-  async function saveContact() {
+  function update<K extends keyof typeof form>(key: K, value: string) {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function saveProfile() {
     setSaving(true);
     setError(null);
     const { error: updateError } = await supabase
       .from("profiles")
-      .update({ full_name: fullName, phone: phone || null, is_active: isActive })
+      .update({
+        full_name: form.full_name,
+        phone: form.phone || null,
+        contact_email: form.contact_email || null,
+        guardian_full_name: form.guardian_full_name || null,
+        guardian_phone: form.guardian_phone || null,
+        birth_date: form.birth_date || null,
+        notes: form.notes || null,
+        vk_contact: form.vk_contact || null,
+        telegram_contact: form.telegram_contact || null,
+        max_contact: form.max_contact || null,
+        preferred_contact_channel: form.preferred_contact_channel || null,
+        preferred_contact_note: form.preferred_contact_note || null,
+        is_active: isActive,
+      })
       .eq("id", student.id);
     setSaving(false);
     if (updateError) {
@@ -381,6 +455,9 @@ function StudentDetailModal({
     await onChanged();
   }
 
+  const inputClass = "w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm";
+  const labelClass = "mb-1 block text-xs font-medium text-slate-600";
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
       <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
@@ -391,38 +468,178 @@ function StudentDetailModal({
           </button>
         </div>
 
-        <div className="space-y-3">
+        <div className="space-y-5">
           <div>
-            <label className="mb-1 block text-xs font-medium text-slate-600">ФИО</label>
-            <input
-              type="text"
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+            <p className="mb-2 text-xs font-medium text-slate-500">Основные данные</p>
+            <div className="space-y-2">
+              <div>
+                <label className={labelClass}>ФИО</label>
+                <input
+                  type="text"
+                  value={form.full_name}
+                  onChange={(e) => update("full_name", e.target.value)}
+                  className={inputClass}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className={labelClass}>Телефон</label>
+                  <input
+                    type="text"
+                    value={form.phone}
+                    onChange={(e) => update("phone", e.target.value)}
+                    placeholder="Не указан"
+                    className={inputClass}
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>Дата рождения</label>
+                  <input
+                    type="date"
+                    value={form.birth_date}
+                    onChange={(e) => update("birth_date", e.target.value)}
+                    className={inputClass}
+                  />
+                </div>
+              </div>
+              <div>
+                <label className={labelClass}>Email (необязательно, для уведомлений)</label>
+                <input
+                  type="email"
+                  value={form.contact_email}
+                  onChange={(e) => update("contact_email", e.target.value)}
+                  className={inputClass}
+                />
+              </div>
+              <label className="flex items-center gap-2 text-sm text-slate-600">
+                <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+                Активный ученик (снимите галочку, если ученик больше не занимается)
+              </label>
+            </div>
+          </div>
+
+          <div>
+            <p className="mb-2 text-xs font-medium text-slate-500">
+              Представитель (родитель) — если ученик несовершеннолетний
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className={labelClass}>ФИО представителя</label>
+                <input
+                  type="text"
+                  value={form.guardian_full_name}
+                  onChange={(e) => update("guardian_full_name", e.target.value)}
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label className={labelClass}>Телефон представителя</label>
+                <input
+                  type="text"
+                  value={form.guardian_phone}
+                  onChange={(e) => update("guardian_phone", e.target.value)}
+                  className={inputClass}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <p className="mb-2 text-xs font-medium text-slate-500">
+              Мессенджеры (необязательно — заполняются по мере получения данных)
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className={labelClass}>VK</label>
+                <input
+                  type="text"
+                  value={form.vk_contact}
+                  onChange={(e) => update("vk_contact", e.target.value)}
+                  placeholder="ссылка или id"
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label className={labelClass}>Telegram</label>
+                <input
+                  type="text"
+                  value={form.telegram_contact}
+                  onChange={(e) => update("telegram_contact", e.target.value)}
+                  placeholder="@username"
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label className={labelClass}>MAX</label>
+                <input
+                  type="text"
+                  value={form.max_contact}
+                  onChange={(e) => update("max_contact", e.target.value)}
+                  placeholder="контакт"
+                  className={inputClass}
+                />
+              </div>
+            </div>
+            <div className="mt-2">
+              <label className={labelClass}>
+                Приоритетный способ связи — куда в первую очередь писать по важным вопросам
+              </label>
+              <select
+                value={form.preferred_contact_channel}
+                onChange={(e) => update("preferred_contact_channel", e.target.value)}
+                className={inputClass}
+              >
+                <option value="">Не указано</option>
+                {Object.entries(CONTACT_CHANNEL_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="text"
+                value={form.preferred_contact_note}
+                onChange={(e) => update("preferred_contact_note", e.target.value)}
+                placeholder="Уточнение, например: писать маме, а не ученику"
+                className={`${inputClass} mt-2`}
+              />
+            </div>
+          </div>
+
+          <div>
+            <p className="mb-2 text-xs font-medium text-slate-500">Заметки (особенности, увлечения)</p>
+            <textarea
+              value={form.notes}
+              onChange={(e) => update("notes", e.target.value)}
+              rows={3}
+              className={inputClass}
+              placeholder="Например: стесняется на первых занятиях, любит поп-музыку, аллергия на цветы в кабинете…"
             />
           </div>
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-600">Телефон</label>
-            <input
-              type="text"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="Не указан"
-              className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-            />
-          </div>
-          <label className="flex items-center gap-2 text-sm text-slate-600">
-            <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
-            Активный ученик (снимите галочку, если ученик больше не занимается)
-          </label>
+
           {error && <p className="text-xs text-red-600">{error}</p>}
           <button
-            onClick={saveContact}
+            onClick={saveProfile}
             disabled={saving}
             className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-60"
           >
             {saving ? "Сохраняем…" : "Сохранить изменения"}
           </button>
+        </div>
+
+        <div className="mt-5 rounded-lg bg-slate-50 p-3">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium text-slate-500">Репертуар</p>
+            <Link
+              href={`/dashboard/repertoire?student=${student.id}`}
+              className="text-xs font-medium text-slate-600 underline hover:text-slate-800"
+            >
+              Открыть репертуар →
+            </Link>
+          </div>
+          <p className="mt-1 text-xs text-slate-400">
+            Список произведений, готовность и заметки педагога — необязательно, заполняется постепенно
+          </p>
         </div>
 
         {isAdmin && (
@@ -453,7 +670,7 @@ function StudentDetailModal({
                       type="number"
                       value={ratePrice}
                       onChange={(e) => setRatePrice(Number(e.target.value) || 0)}
-                      className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                      className={inputClass}
                     />
                   </div>
                   <div>
@@ -462,7 +679,7 @@ function StudentDetailModal({
                       type="number"
                       value={rateTeacherAmount}
                       onChange={(e) => setRateTeacherAmount(Number(e.target.value) || 0)}
-                      className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                      className={inputClass}
                     />
                   </div>
                 </div>
@@ -568,6 +785,10 @@ function AddStudentModal({ onClose, onCreated }: { onClose: () => void; onCreate
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
       <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
         <h2 className="mb-4 text-lg font-semibold text-slate-800">Новый ученик</h2>
+        <p className="mb-3 text-xs text-slate-400">
+          Здесь только самое необходимое для создания карточки. Телефон представителя, мессенджеры,
+          день рождения и заметки можно будет добавить позже — откройте карточку ученика в списке.
+        </p>
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
             <label className="mb-1 block text-xs font-medium text-slate-600">ФИО</label>
@@ -689,7 +910,7 @@ function IssueSubscriptionModal({
         <h2 className="mb-4 text-lg font-semibold text-slate-800">Выдать абонемент</h2>
         {plans.length === 0 ? (
           <p className="text-sm text-slate-500">
-            В справочнике нет действующих тарифов — сначала добавьте тариф через «Тарифы абонементов».
+            В справочнике нет действующих тарифов — сначала добавьте тариф на вкладке «Тарифы».
           </p>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-3">
@@ -762,17 +983,17 @@ function IssueSubscriptionModal({
   );
 }
 
-// ---------- Тарифы абонементов (только владелец) ----------
+// ---------- Тарифы абонементов (вкладка, только для admin/manager; цену меняет только admin) ----------
 
-function PlansModal({
+function PlansTab({
   plans,
+  readOnly,
   supabase,
-  onClose,
   onChanged,
 }: {
   plans: SubscriptionPlan[];
+  readOnly: boolean;
   supabase: SupabaseClient;
-  onClose: () => void;
   onChanged: () => Promise<void>;
 }) {
   const [rows, setRows] = useState(plans);
@@ -838,61 +1059,65 @@ function PlansModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-slate-800">Тарифы абонементов</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
-            ✕
-          </button>
-        </div>
-
-        <div className="space-y-3">
-          {rows.map((row) => (
-            <div key={row.id} className="rounded-lg border border-slate-200 p-3">
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-                <input
-                  value={row.name}
-                  onChange={(e) => updateRow(row.id, { name: e.target.value })}
-                  className="col-span-2 rounded-lg border border-slate-300 px-2 py-1.5 text-sm sm:col-span-1"
-                  placeholder="Название"
-                />
-                <input
-                  type="number"
-                  value={row.lessons_count}
-                  onChange={(e) => updateRow(row.id, { lessons_count: Number(e.target.value) || 0 })}
-                  className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-                  placeholder="Занятий"
-                />
-                <input
-                  type="number"
-                  value={row.validity_days}
-                  onChange={(e) => updateRow(row.id, { validity_days: Number(e.target.value) || 0 })}
-                  className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-                  placeholder="Дней"
-                />
-                <input
-                  type="number"
-                  value={row.price}
-                  onChange={(e) => updateRow(row.id, { price: Number(e.target.value) || 0 })}
-                  className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-                  placeholder="Цена"
-                />
-                <label className="flex items-center gap-1.5 text-xs text-slate-500">
-                  <input
-                    type="checkbox"
-                    checked={row.is_active}
-                    onChange={(e) => updateRow(row.id, { is_active: e.target.checked })}
-                  />
-                  Активен
-                </label>
-              </div>
+    <div>
+      {readOnly && (
+        <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+          Изменение тарифов и цен доступно только владельцу студии — здесь можно только посмотреть.
+        </p>
+      )}
+      <div className="space-y-3">
+        {rows.map((row) => (
+          <div key={row.id} className="rounded-lg border border-slate-200 bg-white p-3">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
               <input
-                value={row.description ?? ""}
-                onChange={(e) => updateRow(row.id, { description: e.target.value })}
-                className="mt-2 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-                placeholder="Описание (необязательно)"
+                value={row.name}
+                onChange={(e) => updateRow(row.id, { name: e.target.value })}
+                disabled={readOnly}
+                className="col-span-2 rounded-lg border border-slate-300 px-2 py-1.5 text-sm disabled:bg-slate-50 sm:col-span-1"
+                placeholder="Название"
               />
+              <input
+                type="number"
+                value={row.lessons_count}
+                onChange={(e) => updateRow(row.id, { lessons_count: Number(e.target.value) || 0 })}
+                disabled={readOnly}
+                className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm disabled:bg-slate-50"
+                placeholder="Занятий"
+              />
+              <input
+                type="number"
+                value={row.validity_days}
+                onChange={(e) => updateRow(row.id, { validity_days: Number(e.target.value) || 0 })}
+                disabled={readOnly}
+                className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm disabled:bg-slate-50"
+                placeholder="Дней"
+              />
+              <input
+                type="number"
+                value={row.price}
+                onChange={(e) => updateRow(row.id, { price: Number(e.target.value) || 0 })}
+                disabled={readOnly}
+                className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm disabled:bg-slate-50"
+                placeholder="Цена"
+              />
+              <label className="flex items-center gap-1.5 text-xs text-slate-500">
+                <input
+                  type="checkbox"
+                  checked={row.is_active}
+                  onChange={(e) => updateRow(row.id, { is_active: e.target.checked })}
+                  disabled={readOnly}
+                />
+                Активен
+              </label>
+            </div>
+            <input
+              value={row.description ?? ""}
+              onChange={(e) => updateRow(row.id, { description: e.target.value })}
+              disabled={readOnly}
+              className="mt-2 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm disabled:bg-slate-50"
+              placeholder="Описание (необязательно)"
+            />
+            {!readOnly && (
               <button
                 onClick={() => saveRow(row)}
                 disabled={savingId === row.id}
@@ -900,10 +1125,12 @@ function PlansModal({
               >
                 {savingId === row.id ? "Сохраняем…" : "Сохранить"}
               </button>
-            </div>
-          ))}
-        </div>
+            )}
+          </div>
+        ))}
+      </div>
 
+      {!readOnly && (
         <div className="mt-5 rounded-lg bg-slate-50 p-3">
           <p className="mb-2 text-xs font-medium text-slate-500">+ Новый тариф</p>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
@@ -950,7 +1177,7 @@ function PlansModal({
             {creating ? "Добавляем…" : "Добавить тариф"}
           </button>
         </div>
-      </div>
+      )}
     </div>
   );
 }
