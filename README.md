@@ -7,8 +7,10 @@
 3. В настройках проекта Vercel (Settings → Environment Variables) добавьте:
    - `NEXT_PUBLIC_SUPABASE_URL` — адрес вашего проекта Supabase
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY` — публичный (anon/publishable) ключ Supabase
+   - `SUPABASE_SERVICE_ROLE_KEY` — секретный (service_role) ключ Supabase, нужен
+     для создания логинов новым ученикам (модуль «Ученики и абонементы»)
 
-   Оба значения найдёте в Supabase: Project Settings → API Keys.
+   Все три значения найдёте в Supabase: Project Settings → API Keys.
 4. Нажмите Deploy.
 
 ## SQL, который нужно выполнить в Supabase (SQL Editor), по шагам
