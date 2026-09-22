@@ -61,10 +61,22 @@ export default async function DashboardPage() {
             </p>
           </Link>
 
-          <div className="rounded-2xl bg-white p-6 text-slate-400 shadow-md">
-            <h2 className="font-semibold">Ученики и абонементы</h2>
-            <p className="mt-1 text-sm">Скоро появится здесь</p>
-          </div>
+          {profile?.role === "admin" || profile?.role === "manager" ? (
+            <Link
+              href="/dashboard/students"
+              className="rounded-2xl bg-white p-6 shadow-md transition hover:shadow-lg"
+            >
+              <h2 className="font-semibold text-slate-800">Ученики и абонементы</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Список учеников, абонементы, тарифы
+              </p>
+            </Link>
+          ) : (
+            <div className="rounded-2xl bg-white p-6 text-slate-400 shadow-md">
+              <h2 className="font-semibold">Ученики и абонементы</h2>
+              <p className="mt-1 text-sm">Скоро появится здесь</p>
+            </div>
+          )}
         </div>
       </div>
     </main>
