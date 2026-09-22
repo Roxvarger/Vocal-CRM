@@ -100,10 +100,6 @@ export default function StudentsClient({
 }) {
   const supabase = useMemo(() => createClient(), []);
   const isAdmin = currentUser.role === "admin";
-  // "Администратор" и "Главный администратор" в терминах студии — это роли manager и admin.
-  const isStaff = currentUser.role === "admin" || currentUser.role === "manager";
-
-  const [tab, setTab] = useState<"students" | "plans">("students");
 
   const [students, setStudents] = useState<StudentProfile[]>([]);
   const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
@@ -128,10 +124,8 @@ export default function StudentsClient({
   }
 
   async function loadPlans() {
-    // Тарифы доступны только администратору и менеджеру (staff) — преподаватели
-    // на эту страницу вообще не попадают, а правило безопасности в Supabase
-    // дополнительно не отдаст им эти данные, даже если запрос уйдёт напрямую.
-    if (!isStaff) return;
+    // Нужен только список тарифов для выдачи абонемента ученику —
+    // управление тарифами и ценами теперь в отдельном разделе «Тарифы».
     const { data } = await supabase
       .from("subscription_plans")
       .select("id, name, description, lessons_count, validity_days, price, is_active")
@@ -199,119 +193,84 @@ export default function StudentsClient({
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-slate-800">Ученики и абонементы</h1>
-        {tab === "students" && (
-          <button
-            onClick={() => setAddModalOpen(true)}
-            className="rounded-lg bg-slate-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
-          >
-            + Добавить ученика
-          </button>
-        )}
+        <button
+          onClick={() => setAddModalOpen(true)}
+          className="rounded-lg bg-slate-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
+        >
+          + Добавить ученика
+        </button>
       </div>
 
-      {isStaff && (
-        <div className="mb-4 flex gap-1 border-b border-slate-200">
-          <button
-            onClick={() => setTab("students")}
-            className={`px-3 py-2 text-sm font-medium ${
-              tab === "students"
-                ? "border-b-2 border-slate-800 text-slate-800"
-                : "text-slate-400 hover:text-slate-600"
-            }`}
-          >
-            Ученики
-          </button>
-          <button
-            onClick={() => setTab("plans")}
-            className={`px-3 py-2 text-sm font-medium ${
-              tab === "plans"
-                ? "border-b-2 border-slate-800 text-slate-800"
-                : "text-slate-400 hover:text-slate-600"
-            }`}
-          >
-            Тарифы
-          </button>
-        </div>
-      )}
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Поиск по имени…"
+        className="mb-4 w-full max-w-sm rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
+      />
 
-      {tab === "students" ? (
-        <>
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Поиск по имени…"
-            className="mb-4 w-full max-w-sm rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
-          />
-
-          {loading ? (
-            <p className="text-sm text-slate-400">Загрузка…</p>
-          ) : filteredStudents.length === 0 ? (
-            <p className="text-sm text-slate-400">Ученики не найдены</p>
-          ) : (
-            <div className="overflow-x-auto rounded-2xl bg-white shadow-md">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-100 text-left text-xs text-slate-400">
-                    <th className="px-4 py-2 font-medium">Имя</th>
-                    <th className="px-4 py-2 font-medium">Телефон</th>
-                    <th className="px-4 py-2 font-medium">Абонемент</th>
-                    <th className="px-4 py-2 font-medium"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredStudents.map((s) => {
-                    const sub = currentSubscription(s.id);
-                    const personalRate = personalRateByStudent[s.id];
-                    return (
-                      <tr
-                        key={s.id}
-                        className="cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50"
-                        onClick={() => setDetailStudentId(s.id)}
-                      >
-                        <td className="whitespace-nowrap px-4 py-2.5">
-                          <span className={s.is_active ? "text-slate-800" : "text-slate-400 line-through"}>
-                            {s.full_name}
-                          </span>
-                          {!s.is_active && (
-                            <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-400">
-                              Архив
-                            </span>
-                          )}
-                          {personalRate?.is_active && (
-                            <span className="ml-2 rounded-full bg-pink-50 px-2 py-0.5 text-xs text-pink-600">
-                              Персональные условия
-                            </span>
-                          )}
-                        </td>
-                        <td className="whitespace-nowrap px-4 py-2.5 text-slate-500">{s.phone ?? "—"}</td>
-                        <td className="whitespace-nowrap px-4 py-2.5">
-                          {sub && isSubscriptionActive(sub) ? (
-                            <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700">
-                              {sub.plan?.name ?? "Абонемент"}: {sub.lessons_remaining}/{sub.lessons_total} до{" "}
-                              {formatDate(sub.expires_at)}
-                            </span>
-                          ) : (
-                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
-                              Нет активного абонемента
-                            </span>
-                          )}
-                        </td>
-                        <td className="whitespace-nowrap px-4 py-2.5 text-right text-xs text-slate-400">
-                          Открыть →
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
+      {loading ? (
+        <p className="text-sm text-slate-400">Загрузка…</p>
+      ) : filteredStudents.length === 0 ? (
+        <p className="text-sm text-slate-400">Ученики не найдены</p>
       ) : (
-        isStaff && (
-          <PlansTab plans={plans} readOnly={!isAdmin} supabase={supabase} onChanged={loadPlans} />
-        )
+        <div className="overflow-x-auto rounded-2xl bg-white shadow-md">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-100 text-left text-xs text-slate-400">
+                <th className="px-4 py-2 font-medium">Имя</th>
+                <th className="px-4 py-2 font-medium">Телефон</th>
+                <th className="px-4 py-2 font-medium">Абонемент</th>
+                <th className="px-4 py-2 font-medium"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredStudents.map((s) => {
+                const sub = currentSubscription(s.id);
+                const personalRate = personalRateByStudent[s.id];
+                return (
+                  <tr
+                    key={s.id}
+                    className="cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50"
+                    onClick={() => setDetailStudentId(s.id)}
+                  >
+                    <td className="whitespace-nowrap px-4 py-2.5">
+                      <span className={s.is_active ? "text-slate-800" : "text-slate-400 line-through"}>
+                        {s.full_name}
+                      </span>
+                      {!s.is_active && (
+                        <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-400">
+                          Архив
+                        </span>
+                      )}
+                      {personalRate?.is_active && (
+                        <span className="ml-2 rounded-full bg-pink-50 px-2 py-0.5 text-xs text-pink-600">
+                          Персональные условия
+                        </span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-slate-500">{s.phone ?? "—"}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5">
+                      {sub && isSubscriptionActive(sub) ? (
+                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700">
+                          {sub.plan?.name ?? "Абонемент"}: {sub.lessons_remaining}/{sub.lessons_total} до{" "}
+                          {formatDate(sub.expires_at)}
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
+                          Нет активного абонемента
+                        </span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-right text-xs text-slate-400">
+                      Открыть →
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {detailStudent && (
@@ -394,10 +353,6 @@ function StudentDetailModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [rateForm, setRateForm] = useState(false);
-  const [ratePrice, setRatePrice] = useState(personalRate?.price ?? 0);
-  const [rateTeacherAmount, setRateTeacherAmount] = useState(personalRate?.teacher_amount ?? 0);
-
   function update<K extends keyof typeof form>(key: K, value: string) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
@@ -428,30 +383,6 @@ function StudentDetailModal({
       setError(updateError.message);
       return;
     }
-    await onChanged();
-  }
-
-  async function togglePersonalRate(active: boolean) {
-    if (!personalRate) return;
-    await supabase.from("personal_lesson_rates").update({ is_active: active }).eq("id", personalRate.id);
-    await onChanged();
-  }
-
-  async function savePersonalRate() {
-    if (personalRate) {
-      await supabase
-        .from("personal_lesson_rates")
-        .update({ price: ratePrice, teacher_amount: rateTeacherAmount, is_active: true })
-        .eq("id", personalRate.id);
-    } else {
-      await supabase.from("personal_lesson_rates").insert({
-        student_id: student.id,
-        price: ratePrice,
-        teacher_amount: rateTeacherAmount,
-        is_active: true,
-      });
-    }
-    setRateForm(false);
     await onChanged();
   }
 
@@ -644,67 +575,22 @@ function StudentDetailModal({
 
         {isAdmin && (
           <div className="mt-5 rounded-lg bg-slate-50 p-3">
-            <p className="mb-2 text-xs font-medium text-slate-500">Персональные условия занятий</p>
-            {personalRate?.is_active ? (
-              <div className="text-sm text-slate-700">
-                <p>
-                  Стоимость занятия: <strong>{formatMoney(personalRate.price)}</strong>, преподавателю:{" "}
-                  <strong>{formatMoney(personalRate.teacher_amount)}</strong>
-                </p>
-                <p className="mt-1 text-xs text-pink-600">
-                  Пока эти условия активны, все занятия ученика автоматически ставятся как «Персональное»
-                </p>
-                <button
-                  onClick={() => togglePersonalRate(false)}
-                  className="mt-2 rounded-lg border border-slate-300 px-3 py-1 text-xs text-slate-600 hover:bg-white"
-                >
-                  Снять персональные условия
-                </button>
-              </div>
-            ) : rateForm ? (
-              <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="mb-1 block text-xs text-slate-500">Цена занятия, ₽</label>
-                    <input
-                      type="number"
-                      value={ratePrice}
-                      onChange={(e) => setRatePrice(Number(e.target.value) || 0)}
-                      className={inputClass}
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs text-slate-500">Доля преподавателя, ₽</label>
-                    <input
-                      type="number"
-                      value={rateTeacherAmount}
-                      onChange={(e) => setRateTeacherAmount(Number(e.target.value) || 0)}
-                      className={inputClass}
-                    />
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setRateForm(false)}
-                    className="rounded-lg border border-slate-300 px-3 py-1 text-xs text-slate-600 hover:bg-white"
-                  >
-                    Отмена
-                  </button>
-                  <button
-                    onClick={savePersonalRate}
-                    className="rounded-lg bg-slate-800 px-3 py-1 text-xs font-medium text-white hover:bg-slate-700"
-                  >
-                    Назначить
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button
-                onClick={() => setRateForm(true)}
-                className="rounded-lg border border-slate-300 px-3 py-1 text-xs text-slate-600 hover:bg-white"
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium text-slate-500">Персональные условия занятий</p>
+              <Link
+                href={`/dashboard/tariffs?student=${student.id}`}
+                className="text-xs font-medium text-slate-600 underline hover:text-slate-800"
               >
-                {personalRate ? "Возобновить персональные условия" : "+ Назначить персональные условия"}
-              </button>
+                Открыть в тарифах →
+              </Link>
+            </div>
+            {personalRate?.is_active ? (
+              <p className="mt-1 text-xs text-pink-600">
+                Назначены: {formatMoney(personalRate.price)} за занятие, преподавателю{" "}
+                {formatMoney(personalRate.teacher_amount)}
+              </p>
+            ) : (
+              <p className="mt-1 text-xs text-slate-400">Не назначены</p>
             )}
           </div>
         )}
@@ -910,7 +796,7 @@ function IssueSubscriptionModal({
         <h2 className="mb-4 text-lg font-semibold text-slate-800">Выдать абонемент</h2>
         {plans.length === 0 ? (
           <p className="text-sm text-slate-500">
-            В справочнике нет действующих тарифов — сначала добавьте тариф на вкладке «Тарифы».
+            В справочнике нет действующих тарифов — сначала добавьте тариф в разделе «Тарифы».
           </p>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-3">
@@ -979,205 +865,6 @@ function IssueSubscriptionModal({
           </form>
         )}
       </div>
-    </div>
-  );
-}
-
-// ---------- Тарифы абонементов (вкладка, только для admin/manager; цену меняет только admin) ----------
-
-function PlansTab({
-  plans,
-  readOnly,
-  supabase,
-  onChanged,
-}: {
-  plans: SubscriptionPlan[];
-  readOnly: boolean;
-  supabase: SupabaseClient;
-  onChanged: () => Promise<void>;
-}) {
-  const [rows, setRows] = useState(plans);
-  const [savingId, setSavingId] = useState<string | null>(null);
-
-  useEffect(() => setRows(plans), [plans]);
-
-  const [newName, setNewName] = useState("");
-  const [newDescription, setNewDescription] = useState("");
-  const [newLessonsCount, setNewLessonsCount] = useState(8);
-  const [newValidityDays, setNewValidityDays] = useState(30);
-  const [newPrice, setNewPrice] = useState(0);
-  const [creating, setCreating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  function updateRow(id: string, patch: Partial<SubscriptionPlan>) {
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
-  }
-
-  async function saveRow(row: SubscriptionPlan) {
-    setSavingId(row.id);
-    await supabase
-      .from("subscription_plans")
-      .update({
-        name: row.name,
-        description: row.description,
-        lessons_count: row.lessons_count,
-        validity_days: row.validity_days,
-        price: row.price,
-        is_active: row.is_active,
-      })
-      .eq("id", row.id);
-    setSavingId(null);
-    await onChanged();
-  }
-
-  async function createPlan() {
-    if (!newName.trim()) {
-      setError("Укажите название тарифа");
-      return;
-    }
-    setCreating(true);
-    setError(null);
-    const { error: insertError } = await supabase.from("subscription_plans").insert({
-      name: newName.trim(),
-      description: newDescription.trim() || null,
-      lessons_count: newLessonsCount,
-      validity_days: newValidityDays,
-      price: newPrice,
-      is_active: true,
-    });
-    setCreating(false);
-    if (insertError) {
-      setError(insertError.message);
-      return;
-    }
-    setNewName("");
-    setNewDescription("");
-    setNewLessonsCount(8);
-    setNewValidityDays(30);
-    setNewPrice(0);
-    await onChanged();
-  }
-
-  return (
-    <div>
-      {readOnly && (
-        <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
-          Изменение тарифов и цен доступно только владельцу студии — здесь можно только посмотреть.
-        </p>
-      )}
-      <div className="space-y-3">
-        {rows.map((row) => (
-          <div key={row.id} className="rounded-lg border border-slate-200 bg-white p-3">
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-              <input
-                value={row.name}
-                onChange={(e) => updateRow(row.id, { name: e.target.value })}
-                disabled={readOnly}
-                className="col-span-2 rounded-lg border border-slate-300 px-2 py-1.5 text-sm disabled:bg-slate-50 sm:col-span-1"
-                placeholder="Название"
-              />
-              <input
-                type="number"
-                value={row.lessons_count}
-                onChange={(e) => updateRow(row.id, { lessons_count: Number(e.target.value) || 0 })}
-                disabled={readOnly}
-                className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm disabled:bg-slate-50"
-                placeholder="Занятий"
-              />
-              <input
-                type="number"
-                value={row.validity_days}
-                onChange={(e) => updateRow(row.id, { validity_days: Number(e.target.value) || 0 })}
-                disabled={readOnly}
-                className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm disabled:bg-slate-50"
-                placeholder="Дней"
-              />
-              <input
-                type="number"
-                value={row.price}
-                onChange={(e) => updateRow(row.id, { price: Number(e.target.value) || 0 })}
-                disabled={readOnly}
-                className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm disabled:bg-slate-50"
-                placeholder="Цена"
-              />
-              <label className="flex items-center gap-1.5 text-xs text-slate-500">
-                <input
-                  type="checkbox"
-                  checked={row.is_active}
-                  onChange={(e) => updateRow(row.id, { is_active: e.target.checked })}
-                  disabled={readOnly}
-                />
-                Активен
-              </label>
-            </div>
-            <input
-              value={row.description ?? ""}
-              onChange={(e) => updateRow(row.id, { description: e.target.value })}
-              disabled={readOnly}
-              className="mt-2 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm disabled:bg-slate-50"
-              placeholder="Описание (необязательно)"
-            />
-            {!readOnly && (
-              <button
-                onClick={() => saveRow(row)}
-                disabled={savingId === row.id}
-                className="mt-2 rounded-lg border border-slate-300 px-3 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-60"
-              >
-                {savingId === row.id ? "Сохраняем…" : "Сохранить"}
-              </button>
-            )}
-          </div>
-        ))}
-      </div>
-
-      {!readOnly && (
-        <div className="mt-5 rounded-lg bg-slate-50 p-3">
-          <p className="mb-2 text-xs font-medium text-slate-500">+ Новый тариф</p>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-            <input
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              className="col-span-2 rounded-lg border border-slate-300 px-2 py-1.5 text-sm sm:col-span-1"
-              placeholder="Название"
-            />
-            <input
-              type="number"
-              value={newLessonsCount}
-              onChange={(e) => setNewLessonsCount(Number(e.target.value) || 0)}
-              className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-              placeholder="Занятий"
-            />
-            <input
-              type="number"
-              value={newValidityDays}
-              onChange={(e) => setNewValidityDays(Number(e.target.value) || 0)}
-              className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-              placeholder="Дней"
-            />
-            <input
-              type="number"
-              value={newPrice}
-              onChange={(e) => setNewPrice(Number(e.target.value) || 0)}
-              className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-              placeholder="Цена"
-            />
-          </div>
-          <input
-            value={newDescription}
-            onChange={(e) => setNewDescription(e.target.value)}
-            className="mt-2 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-            placeholder="Описание (необязательно)"
-          />
-          {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
-          <button
-            onClick={createPlan}
-            disabled={creating}
-            className="mt-2 rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-60"
-          >
-            {creating ? "Добавляем…" : "Добавить тариф"}
-          </button>
-        </div>
-      )}
     </div>
   );
 }
