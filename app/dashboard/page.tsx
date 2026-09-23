@@ -104,6 +104,16 @@ export default async function DashboardPage() {
             </Link>
           )}
 
+          {profile?.role === "admin" && (
+            <Link
+              href="/dashboard/teachers"
+              className="rounded-2xl bg-white p-6 shadow-md transition hover:shadow-lg"
+            >
+              <h2 className="font-semibold text-slate-800">Преподаватели</h2>
+              <p className="mt-1 text-sm text-slate-500">Контакты и ставки преподавателей</p>
+            </Link>
+          )}
+
           {profile?.role !== "student" && (
             <Link
               href="/dashboard/repertoire"
