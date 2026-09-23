@@ -19,15 +19,28 @@ const KIND_LABELS: Record<BookingKind, string> = {
 type PaymentBooking = {
   id: string;
   starts_at: string;
+  ends_at: string;
   status: string;
   booking_kind: BookingKind;
   is_paid: boolean;
   payment_amount: number | null;
   trial_student_name: string | null;
   trial_student_contact: string | null;
+  subject_id: string | null;
   teacher: { full_name: string } | null;
   student: { full_name: string } | null;
   subject: { name: string } | null;
+};
+
+// Тариф-ориентир для разового/пробного занятия — берётся из справочника «Тарифы»
+// и используется только чтобы подставить сумму по умолчанию; сама оплата всегда
+// хранится как отдельное число в записи, поэтому изменение тарифа задним числом
+// уже отмеченные оплаты не трогает.
+type TariffPlan = {
+  price: number;
+  duration_minutes: number;
+  kind: "trial" | "single";
+  subject_id: string | null;
 };
 
 type PaymentSubscription = {
@@ -75,13 +88,40 @@ export default function PaymentsClient({ locations }: { locations: Location[] })
 
   const [bookings, setBookings] = useState<PaymentBooking[]>([]);
   const [subscriptions, setSubscriptions] = useState<PaymentSubscription[]>([]);
+  const [tariffPlans, setTariffPlans] = useState<TariffPlan[]>([]);
   const [loading, setLoading] = useState(true);
   const [amounts, setAmounts] = useState<Record<string, string>>({});
 
   const BOOKING_SELECT =
-    "id, starts_at, status, booking_kind, is_paid, payment_amount, trial_student_name, trial_student_contact, teacher:teacher_id(full_name), student:student_id(full_name), subject:subject_id(name)";
+    "id, starts_at, ends_at, status, booking_kind, is_paid, payment_amount, trial_student_name, trial_student_contact, subject_id, teacher:teacher_id(full_name), student:student_id(full_name), subject:subject_id(name)";
   const SUBSCRIPTION_SELECT =
     "id, starts_at, expires_at, lessons_total, lessons_remaining, is_paid, payment_amount, student:student_id(full_name), plan:plan_id(name, price)";
+
+  // Ориентировочные цены разовых/пробных занятий из «Тарифов» — только для
+  // подсказки суммы при отметке оплаты, не для перерасчёта уже оплаченного.
+  useEffect(() => {
+    supabase
+      .from("subscription_plans")
+      .select("price, duration_minutes, kind, subject_id")
+      .in("kind", ["trial", "single"])
+      .eq("is_active", true)
+      .then(({ data }) => setTariffPlans((data as unknown as TariffPlan[]) ?? []));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function suggestedPrice(b: PaymentBooking): number | null {
+    if (b.booking_kind !== "trial" && b.booking_kind !== "single") return null;
+    const durationMinutes = Math.round(
+      (new Date(b.ends_at).getTime() - new Date(b.starts_at).getTime()) / 60000
+    );
+    const candidates = tariffPlans.filter(
+      (p) => p.kind === b.booking_kind && p.duration_minutes === durationMinutes
+    );
+    // Тариф конкретного направления имеет приоритет над общим ("Все направления")
+    const bySubject = b.subject_id ? candidates.find((p) => p.subject_id === b.subject_id) : null;
+    const generic = candidates.find((p) => p.subject_id === null);
+    return (bySubject ?? generic)?.price ?? null;
+  }
 
   async function loadBookings() {
     if (!locationId) return;
@@ -132,7 +172,7 @@ export default function PaymentsClient({ locations }: { locations: Location[] })
 
   async function markBookingPaid(booking: PaymentBooking) {
     const raw = amounts[booking.id];
-    const amount = raw ? Number(raw) : null;
+    const amount = raw ? Number(raw) : suggestedPrice(booking);
     const { error } = await supabase
       .from("bookings")
       .update({ is_paid: true, payment_amount: amount, paid_at: new Date().toISOString() })
@@ -286,7 +326,9 @@ export default function PaymentsClient({ locations }: { locations: Location[] })
                     <>
                       <input
                         type="number"
-                        placeholder="Сумма, ₽ (необязательно)"
+                        placeholder={
+                          suggestedPrice(b) ? String(suggestedPrice(b)) : "Сумма, ₽ (необязательно)"
+                        }
                         value={amounts[b.id] ?? ""}
                         onChange={(e) => setAmounts((prev) => ({ ...prev, [b.id]: e.target.value }))}
                         className="w-44 rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
