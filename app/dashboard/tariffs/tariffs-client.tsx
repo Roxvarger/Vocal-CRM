@@ -26,7 +26,11 @@ type LessonSubject = { id: string; name: string; is_active: boolean };
 
 type StudentOption = { id: string; full_name: string };
 
-type PersonalRateMode = "fixed" | "rate_only";
+// Три варианта персональных условий:
+// - rate_only: ученик платит ровно ставку преподавателя, студия ничего не добавляет
+// - fixed: просто фиксированная цена занятия для этого ученика
+// - rate_plus_markup: ставка преподавателя + фиксированная надбавка студии сверху
+type PersonalRateMode = "fixed" | "rate_only" | "rate_plus_markup";
 
 type PersonalRate = {
   id: string;
@@ -55,6 +59,56 @@ const DURATION_LABELS: Record<Duration, string> = {
 
 function formatMoney(n: number): string {
   return `${n.toLocaleString("ru-RU")} ₽`;
+}
+
+function describeRate(rate: PersonalRate): string {
+  if (rate.mode === "rate_only") {
+    return `Только ставка преподавателя — ${formatMoney(rate.teacher_amount)}`;
+  }
+  if (rate.mode === "rate_plus_markup") {
+    const markup = rate.price - rate.teacher_amount;
+    return `Ставка ${formatMoney(rate.teacher_amount)} + надбавка ${formatMoney(markup)} = ${formatMoney(
+      rate.price
+    )}`;
+  }
+  return `Фиксированная цена — ${formatMoney(rate.price)}`;
+}
+
+// ---------- Модальное окно ----------
+
+function Modal({
+  title,
+  onClose,
+  children,
+  wide,
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+  wide?: boolean;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/40 px-4 py-8"
+      onClick={onClose}
+    >
+      <div
+        className={`w-full ${wide ? "max-w-3xl" : "max-w-lg"} rounded-2xl bg-white p-5 shadow-xl`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-base font-semibold text-slate-800">{title}</h2>
+          <button
+            onClick={onClose}
+            className="rounded-lg px-2 py-1 text-sm text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+          >
+            ✕
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
 }
 
 // ---------- Основной компонент ----------
@@ -187,10 +241,9 @@ function AdminTariffs({
   const [plans, setPlans] = useState<SubscriptionPlan[]>(initialPlans);
   const [personalRates, setPersonalRates] = useState<PersonalRate[]>(initialPersonalRates);
   const [subjects, setSubjects] = useState<LessonSubject[]>(initialSubjects);
-  const [search, setSearch] = useState("");
-  const [studentId, setStudentId] = useState<string | null>(initialStudentId);
-  const [personalOpen, setPersonalOpen] = useState(Boolean(initialStudentId));
-  const [subjectsOpen, setSubjectsOpen] = useState(false);
+  const [hideHiddenPlans, setHideHiddenPlans] = useState(true);
+  const [subjectsModalOpen, setSubjectsModalOpen] = useState(false);
+  const [personalModalOpen, setPersonalModalOpen] = useState(Boolean(initialStudentId));
 
   async function reloadPlans() {
     const { data } = await supabase
@@ -217,22 +270,9 @@ function AdminTariffs({
     setPersonalRates(data ?? []);
   }
 
-  const personalRateByStudent = useMemo(() => {
-    const map: Record<string, PersonalRate> = {};
-    personalRates.forEach((r) => {
-      map[r.student_id] = r;
-    });
-    return map;
-  }, [personalRates]);
-
-  const filteredStudents = students.filter((s) =>
-    s.full_name.toLowerCase().includes(search.trim().toLowerCase())
-  );
-
-  const student = students.find((s) => s.id === studentId) ?? null;
-
-  const lessonPlans = plans.filter((p) => p.kind !== "rental");
-  const rentalPlans = plans.filter((p) => p.kind === "rental");
+  const visiblePlans = hideHiddenPlans ? plans.filter((p) => p.is_active) : plans;
+  const lessonPlans = visiblePlans.filter((p) => p.kind !== "rental");
+  const rentalPlans = visiblePlans.filter((p) => p.kind === "rental");
 
   return (
     <div className="space-y-8">
@@ -243,6 +283,15 @@ function AdminTariffs({
           администратор — менеджер и преподаватель видят этот раздел без персональных условий.
         </p>
       </div>
+
+      <label className="flex w-fit items-center gap-2 text-sm text-slate-600">
+        <input
+          type="checkbox"
+          checked={hideHiddenPlans}
+          onChange={(e) => setHideHiddenPlans(e.target.checked)}
+        />
+        Не показывать скрытые тарифы
+      </label>
 
       <section>
         <h2 className="mb-3 text-base font-semibold text-slate-800">Общие тарифы</h2>
@@ -280,79 +329,38 @@ function AdminTariffs({
         </div>
       </section>
 
-      <section>
-        <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => setSubjectsOpen((v) => !v)}
-            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-          >
-            {subjectsOpen ? "Скрыть направления занятий" : "Направления занятий →"}
-          </button>
-          <button
-            onClick={() => setPersonalOpen((v) => !v)}
-            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-          >
-            {personalOpen ? "Скрыть персональные условия" : "Персональные условия учеников →"}
-          </button>
-        </div>
-
-        {subjectsOpen && (
-          <div className="mt-4 max-w-sm">
-            <SubjectsManager supabase={supabase} subjects={subjects} onChanged={reloadSubjects} />
-          </div>
-        )}
-
-        {personalOpen && (
-          <div className="mt-4 grid gap-4 sm:grid-cols-[240px_1fr]">
-            <div>
-              <input
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Поиск ученика…"
-                className="mb-2 w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
-              />
-              <div className="max-h-[60vh] overflow-y-auto rounded-2xl bg-white shadow-md">
-                {filteredStudents.length === 0 ? (
-                  <p className="p-3 text-xs text-slate-400">Ученики не найдены</p>
-                ) : (
-                  filteredStudents.map((s) => {
-                    const rate = personalRateByStudent[s.id];
-                    return (
-                      <button
-                        key={s.id}
-                        onClick={() => setStudentId(s.id)}
-                        className={`flex w-full items-center justify-between border-b border-slate-50 px-3 py-2 text-left text-sm last:border-0 hover:bg-slate-50 ${
-                          s.id === studentId ? "bg-slate-100 font-medium text-slate-800" : "text-slate-600"
-                        }`}
-                      >
-                        <span>{s.full_name}</span>
-                        {rate?.is_active && <span className="h-2 w-2 rounded-full bg-pink-400" />}
-                      </button>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-
-            <div>
-              {!student ? (
-                <p className="text-sm text-slate-400">
-                  Выберите ученика слева, чтобы назначить или изменить его персональные условия
-                </p>
-              ) : (
-                <PersonalRateEditor
-                  key={student.id}
-                  student={student}
-                  rate={personalRateByStudent[student.id]}
-                  supabase={supabase}
-                  onChanged={reloadPersonalRates}
-                />
-              )}
-            </div>
-          </div>
-        )}
+      <section className="flex flex-wrap gap-2">
+        <button
+          onClick={() => setSubjectsModalOpen(true)}
+          className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+        >
+          Направления занятий →
+        </button>
+        <button
+          onClick={() => setPersonalModalOpen(true)}
+          className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+        >
+          Персональные условия учеников →
+        </button>
       </section>
+
+      {subjectsModalOpen && (
+        <Modal title="Направления занятий" onClose={() => setSubjectsModalOpen(false)}>
+          <SubjectsManager supabase={supabase} subjects={subjects} onChanged={reloadSubjects} />
+        </Modal>
+      )}
+
+      {personalModalOpen && (
+        <Modal title="Персональные условия учеников" onClose={() => setPersonalModalOpen(false)} wide>
+          <PersonalConditionsPanel
+            supabase={supabase}
+            students={students}
+            personalRates={personalRates}
+            initialStudentId={initialStudentId}
+            onChanged={reloadPersonalRates}
+          />
+        </Modal>
+      )}
     </div>
   );
 }
@@ -779,8 +787,11 @@ function SubjectsManager({
   onChanged: () => Promise<void>;
 }) {
   const [name, setName] = useState("");
+  const [hideHidden, setHideHidden] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const visibleSubjects = hideHidden ? subjects.filter((s) => s.is_active) : subjects;
 
   async function addSubject(e: React.FormEvent) {
     e.preventDefault();
@@ -808,17 +819,22 @@ function SubjectsManager({
   }
 
   return (
-    <div className="rounded-2xl bg-white p-4 shadow-md">
+    <div>
       <p className="mb-3 text-xs text-slate-500">
         Список направлений занятий (вокал, фортепиано и т.д.) — используется при записи в
         расписание и для тарифов с ценой по направлению.
       </p>
 
-      {subjects.length === 0 ? (
-        <p className="mb-3 text-xs text-slate-400">Направления пока не добавлены</p>
+      <label className="mb-3 flex w-fit items-center gap-2 text-sm text-slate-600">
+        <input type="checkbox" checked={hideHidden} onChange={(e) => setHideHidden(e.target.checked)} />
+        Не показывать скрытые
+      </label>
+
+      {visibleSubjects.length === 0 ? (
+        <p className="mb-3 text-xs text-slate-400">Направления не найдены</p>
       ) : (
         <div className="mb-3 space-y-1.5">
-          {subjects.map((s) => (
+          {visibleSubjects.map((s) => (
             <div key={s.id} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-1.5">
               <span className={`text-sm ${s.is_active ? "text-slate-800" : "text-slate-400 line-through"}`}>
                 {s.name}
@@ -854,6 +870,164 @@ function SubjectsManager({
   );
 }
 
+// ---------- Персональные условия: список + добавление ----------
+
+function PersonalConditionsPanel({
+  supabase,
+  students,
+  personalRates,
+  initialStudentId,
+  onChanged,
+}: {
+  supabase: SupabaseClient;
+  students: StudentOption[];
+  personalRates: PersonalRate[];
+  initialStudentId: string | null;
+  onChanged: () => Promise<void>;
+}) {
+  const [view, setView] = useState<"list" | "search" | "edit">(initialStudentId ? "edit" : "list");
+  const [search, setSearch] = useState("");
+  const [editingStudentId, setEditingStudentId] = useState<string | null>(initialStudentId);
+
+  const activeRates = personalRates.filter((r) => r.is_active);
+  const studentById = useMemo(() => {
+    const map: Record<string, StudentOption> = {};
+    students.forEach((s) => (map[s.id] = s));
+    return map;
+  }, [students]);
+
+  const filteredStudents = students.filter((s) =>
+    s.full_name.toLowerCase().includes(search.trim().toLowerCase())
+  );
+
+  async function cancelRate(rate: PersonalRate) {
+    if (!confirm(`Отменить персональные условия для ${studentById[rate.student_id]?.full_name ?? "ученика"}?`)) {
+      return;
+    }
+    await supabase.from("personal_lesson_rates").update({ is_active: false }).eq("id", rate.id);
+    await onChanged();
+  }
+
+  if (view === "edit" && editingStudentId) {
+    const student = studentById[editingStudentId];
+    const rate = personalRates.find((r) => r.student_id === editingStudentId);
+    return (
+      <div>
+        <button
+          onClick={() => {
+            setView("list");
+            setEditingStudentId(null);
+          }}
+          className="mb-3 text-sm text-slate-500 hover:text-slate-700"
+        >
+          ← К списку
+        </button>
+        {student ? (
+          <PersonalRateEditor
+            key={student.id}
+            student={student}
+            rate={rate}
+            supabase={supabase}
+            onChanged={async () => {
+              await onChanged();
+              setView("list");
+              setEditingStudentId(null);
+            }}
+          />
+        ) : (
+          <p className="text-sm text-slate-400">Ученик не найден</p>
+        )}
+      </div>
+    );
+  }
+
+  if (view === "search") {
+    return (
+      <div>
+        <button onClick={() => setView("list")} className="mb-3 text-sm text-slate-500 hover:text-slate-700">
+          ← К списку
+        </button>
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Поиск ученика…"
+          className="mb-2 w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
+        />
+        <div className="max-h-[50vh] overflow-y-auto rounded-2xl bg-slate-50">
+          {filteredStudents.length === 0 ? (
+            <p className="p-3 text-xs text-slate-400">Ученики не найдены</p>
+          ) : (
+            filteredStudents.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => {
+                  setEditingStudentId(s.id);
+                  setView("edit");
+                }}
+                className="flex w-full items-center justify-between border-b border-white px-3 py-2 text-left text-sm last:border-0 hover:bg-white"
+              >
+                <span className="text-slate-700">{s.full_name}</span>
+                {personalRates.find((r) => r.student_id === s.id && r.is_active) && (
+                  <span className="h-2 w-2 rounded-full bg-pink-400" />
+                )}
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {activeRates.length === 0 ? (
+        <p className="mb-3 text-sm text-slate-400">Персональные условия пока никому не назначены</p>
+      ) : (
+        <div className="mb-4 space-y-2">
+          {activeRates.map((r) => (
+            <div
+              key={r.id}
+              className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-slate-50 p-3"
+            >
+              <div>
+                <p className="text-sm font-medium text-slate-800">
+                  {studentById[r.student_id]?.full_name ?? "Ученик"}
+                </p>
+                <p className="text-xs text-slate-500">{describeRate(r)}</p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    setEditingStudentId(r.student_id);
+                    setView("edit");
+                  }}
+                  className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-100"
+                >
+                  Изменить
+                </button>
+                <button
+                  onClick={() => cancelRate(r)}
+                  className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs text-red-600 hover:bg-red-50"
+                >
+                  Отменить
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <button
+        onClick={() => setView("search")}
+        className="rounded-lg bg-slate-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
+      >
+        + Добавить
+      </button>
+    </div>
+  );
+}
+
 // ---------- Персональные условия ученика ----------
 
 function PersonalRateEditor({
@@ -867,10 +1041,15 @@ function PersonalRateEditor({
   supabase: SupabaseClient;
   onChanged: () => Promise<void>;
 }) {
-  const [enabled, setEnabled] = useState(rate?.is_active ?? false);
+  const [enabled, setEnabled] = useState(rate?.is_active ?? true);
   const [mode, setMode] = useState<PersonalRateMode>(rate?.mode ?? "fixed");
-  const [price, setPrice] = useState(rate ? String(rate.price) : "");
-  const [teacherAmount, setTeacherAmount] = useState(rate ? String(rate.teacher_amount) : "");
+  const [price, setPrice] = useState(rate && rate.mode === "fixed" ? String(rate.price) : "");
+  const [teacherAmount, setTeacherAmount] = useState(
+    rate && rate.mode !== "fixed" ? String(rate.teacher_amount) : ""
+  );
+  const [markup, setMarkup] = useState(
+    rate && rate.mode === "rate_plus_markup" ? String(rate.price - rate.teacher_amount) : ""
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -878,20 +1057,33 @@ function PersonalRateEditor({
     setSaving(true);
     setError(null);
 
-    // В режиме "только ставка преподавателя" студия ничего не добавляет сверху —
-    // ученик платит ровно ставку преподавателя, поэтому цена и выплата совпадают.
-    const teacherAmountValue = Number(teacherAmount) || 0;
-    const priceValue = mode === "rate_only" ? teacherAmountValue : Number(price) || 0;
+    let priceValue = 0;
+    let teacherAmountValue = 0;
+
+    if (mode === "rate_only") {
+      // Ученик платит ровно ставку преподавателя — студия ничего не добавляет сверху.
+      teacherAmountValue = Number(teacherAmount) || 0;
+      priceValue = teacherAmountValue;
+    } else if (mode === "rate_plus_markup") {
+      teacherAmountValue = Number(teacherAmount) || 0;
+      priceValue = teacherAmountValue + (Number(markup) || 0);
+    } else {
+      // fixed — просто индивидуальная цена занятия, без привязки к ставке
+      priceValue = Number(price) || 0;
+      teacherAmountValue = 0;
+    }
+
+    const payload = {
+      price: priceValue,
+      teacher_amount: teacherAmountValue,
+      is_active: enabled,
+      mode,
+    };
 
     if (rate) {
       const { error: updateError } = await supabase
         .from("personal_lesson_rates")
-        .update({
-          price: priceValue,
-          teacher_amount: teacherAmountValue,
-          is_active: enabled,
-          mode,
-        })
+        .update(payload)
         .eq("id", rate.id);
       setSaving(false);
       if (updateError) {
@@ -899,13 +1091,9 @@ function PersonalRateEditor({
         return;
       }
     } else {
-      const { error: insertError } = await supabase.from("personal_lesson_rates").insert({
-        student_id: student.id,
-        price: priceValue,
-        teacher_amount: teacherAmountValue,
-        is_active: enabled,
-        mode,
-      });
+      const { error: insertError } = await supabase
+        .from("personal_lesson_rates")
+        .insert({ student_id: student.id, ...payload });
       setSaving(false);
       if (insertError) {
         setError(insertError.message);
@@ -918,56 +1106,47 @@ function PersonalRateEditor({
   const inputClass = "w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm";
 
   return (
-    <div className="rounded-2xl bg-white p-4 shadow-md">
+    <div className="rounded-2xl bg-white p-1">
       <div className="mb-3 flex items-center justify-between">
         <h3 className="font-semibold text-slate-800">{student.full_name}</h3>
         <label className="flex items-center gap-2 text-sm text-slate-600">
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          Персональные условия активны
+          Условия активны
         </label>
       </div>
 
-      <div className="mb-3 flex gap-4 text-sm">
+      <div className="mb-3 space-y-1.5 text-sm">
         <label className="flex items-center gap-1.5">
-          <input
-            type="radio"
-            checked={mode === "fixed"}
-            onChange={() => setMode("fixed")}
-          />
-          Фиксированная цена занятия
+          <input type="radio" checked={mode === "fixed"} onChange={() => setMode("fixed")} />
+          Фиксированная индивидуальная цена
+        </label>
+        <label className="flex items-center gap-1.5">
+          <input type="radio" checked={mode === "rate_only"} onChange={() => setMode("rate_only")} />
+          Только оплата ставки преподавателя
         </label>
         <label className="flex items-center gap-1.5">
           <input
             type="radio"
-            checked={mode === "rate_only"}
-            onChange={() => setMode("rate_only")}
+            checked={mode === "rate_plus_markup"}
+            onChange={() => setMode("rate_plus_markup")}
           />
-          Оплата только ставки преподавателя
+          Ставка преподавателя + фиксированная надбавка
         </label>
       </div>
 
-      {mode === "fixed" ? (
-        <div className="grid gap-2 sm:grid-cols-2">
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-600">Цена занятия для ученика, ₽</label>
-            <input
-              type="number"
-              value={price}
-              onChange={(e) => setPrice(e.target.value)}
-              className={inputClass}
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-600">Выплата преподавателю, ₽</label>
-            <input
-              type="number"
-              value={teacherAmount}
-              onChange={(e) => setTeacherAmount(e.target.value)}
-              className={inputClass}
-            />
-          </div>
+      {mode === "fixed" && (
+        <div>
+          <label className="mb-1 block text-xs font-medium text-slate-600">Цена занятия для ученика, ₽</label>
+          <input
+            type="number"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+            className={inputClass}
+          />
         </div>
-      ) : (
+      )}
+
+      {mode === "rate_only" && (
         <div className="grid gap-2 sm:grid-cols-2">
           <div>
             <label className="mb-1 block text-xs font-medium text-slate-600">Ставка преподавателя, ₽</label>
@@ -980,6 +1159,32 @@ function PersonalRateEditor({
           </div>
           <p className="self-end pb-1.5 text-xs text-slate-400">
             Ученик платит ровно эту сумму — студия ничего не добавляет сверху
+          </p>
+        </div>
+      )}
+
+      {mode === "rate_plus_markup" && (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-600">Ставка преподавателя, ₽</label>
+            <input
+              type="number"
+              value={teacherAmount}
+              onChange={(e) => setTeacherAmount(e.target.value)}
+              className={inputClass}
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-600">Надбавка студии, ₽</label>
+            <input
+              type="number"
+              value={markup}
+              onChange={(e) => setMarkup(e.target.value)}
+              className={inputClass}
+            />
+          </div>
+          <p className="text-xs text-slate-400 sm:col-span-2">
+            Ученик заплатит {formatMoney((Number(teacherAmount) || 0) + (Number(markup) || 0))}
           </p>
         </div>
       )}
