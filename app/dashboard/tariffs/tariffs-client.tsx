@@ -18,7 +18,11 @@ type SubscriptionPlan = {
   is_active: boolean;
   duration_minutes: Duration;
   kind: PlanKind;
+  subject_id: string | null;
+  subject: { name: string } | null;
 };
+
+type LessonSubject = { id: string; name: string; is_active: boolean };
 
 type StudentOption = { id: string; full_name: string };
 
@@ -61,12 +65,14 @@ export default function TariffsClient({
   students,
   initialPersonalRates,
   initialStudentId,
+  initialSubjects,
 }: {
   isAdmin: boolean;
   plans: SubscriptionPlan[];
   students: StudentOption[];
   initialPersonalRates: PersonalRate[];
   initialStudentId: string | null;
+  initialSubjects: LessonSubject[];
 }) {
   const supabase = useMemo(() => createClient(), []);
 
@@ -81,6 +87,7 @@ export default function TariffsClient({
       students={students}
       initialPersonalRates={initialPersonalRates}
       initialStudentId={initialStudentId}
+      initialSubjects={initialSubjects}
     />
   );
 }
@@ -153,6 +160,7 @@ function PlanCardReadOnly({ plan }: { plan: SubscriptionPlan }) {
         {plan.kind === "subscription"
           ? `${plan.lessons_count} занятий · действует ${plan.validity_days} дн.`
           : KIND_LABELS[plan.kind]}
+        {plan.subject?.name ? ` · ${plan.subject.name}` : ""}
       </p>
       {plan.description && <p className="mt-2 text-sm text-slate-500">{plan.description}</p>}
     </div>
@@ -167,25 +175,39 @@ function AdminTariffs({
   students,
   initialPersonalRates,
   initialStudentId,
+  initialSubjects,
 }: {
   supabase: SupabaseClient;
   initialPlans: SubscriptionPlan[];
   students: StudentOption[];
   initialPersonalRates: PersonalRate[];
   initialStudentId: string | null;
+  initialSubjects: LessonSubject[];
 }) {
   const [plans, setPlans] = useState<SubscriptionPlan[]>(initialPlans);
   const [personalRates, setPersonalRates] = useState<PersonalRate[]>(initialPersonalRates);
+  const [subjects, setSubjects] = useState<LessonSubject[]>(initialSubjects);
   const [search, setSearch] = useState("");
   const [studentId, setStudentId] = useState<string | null>(initialStudentId);
   const [personalOpen, setPersonalOpen] = useState(Boolean(initialStudentId));
+  const [subjectsOpen, setSubjectsOpen] = useState(false);
 
   async function reloadPlans() {
     const { data } = await supabase
       .from("subscription_plans")
-      .select("id, name, description, lessons_count, validity_days, price, is_active, duration_minutes, kind")
+      .select(
+        "id, name, description, lessons_count, validity_days, price, is_active, duration_minutes, kind, subject_id, subject:subject_id(name)"
+      )
       .order("price");
-    setPlans(data ?? []);
+    setPlans((data as unknown as SubscriptionPlan[]) ?? []);
+  }
+
+  async function reloadSubjects() {
+    const { data } = await supabase
+      .from("lesson_subjects")
+      .select("id, name, is_active")
+      .order("name");
+    setSubjects(data ?? []);
   }
 
   async function reloadPersonalRates() {
@@ -232,6 +254,7 @@ function AdminTariffs({
               duration={d}
               allowKindChoice
               plans={lessonPlans.filter((p) => p.duration_minutes === d)}
+              subjects={subjects}
               supabase={supabase}
               onChanged={reloadPlans}
             />
@@ -249,6 +272,7 @@ function AdminTariffs({
               duration={d}
               fixedKind="rental"
               plans={rentalPlans.filter((p) => p.duration_minutes === d)}
+              subjects={subjects}
               supabase={supabase}
               onChanged={reloadPlans}
             />
@@ -257,12 +281,26 @@ function AdminTariffs({
       </section>
 
       <section>
-        <button
-          onClick={() => setPersonalOpen((v) => !v)}
-          className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-        >
-          {personalOpen ? "Скрыть персональные условия" : "Персональные условия учеников →"}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setSubjectsOpen((v) => !v)}
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+          >
+            {subjectsOpen ? "Скрыть направления занятий" : "Направления занятий →"}
+          </button>
+          <button
+            onClick={() => setPersonalOpen((v) => !v)}
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+          >
+            {personalOpen ? "Скрыть персональные условия" : "Персональные условия учеников →"}
+          </button>
+        </div>
+
+        {subjectsOpen && (
+          <div className="mt-4 max-w-sm">
+            <SubjectsManager supabase={supabase} subjects={subjects} onChanged={reloadSubjects} />
+          </div>
+        )}
 
         {personalOpen && (
           <div className="mt-4 grid gap-4 sm:grid-cols-[240px_1fr]">
@@ -325,6 +363,7 @@ function TariffColumn({
   title,
   duration,
   plans,
+  subjects,
   supabase,
   onChanged,
   fixedKind,
@@ -333,6 +372,7 @@ function TariffColumn({
   title: string;
   duration: Duration;
   plans: SubscriptionPlan[];
+  subjects: LessonSubject[];
   supabase: SupabaseClient;
   onChanged: () => Promise<void>;
   fixedKind?: PlanKind;
@@ -358,6 +398,7 @@ function TariffColumn({
           duration={duration}
           fixedKind={fixedKind}
           allowKindChoice={allowKindChoice}
+          subjects={subjects}
           onAdded={async () => {
             setAddFormOpen(false);
             await onChanged();
@@ -370,7 +411,7 @@ function TariffColumn({
       ) : (
         <div className="space-y-2">
           {plans.map((p) => (
-            <PlanRow key={p.id} plan={p} supabase={supabase} onChanged={onChanged} />
+            <PlanRow key={p.id} plan={p} subjects={subjects} supabase={supabase} onChanged={onChanged} />
           ))}
         </div>
       )}
@@ -382,10 +423,12 @@ function TariffColumn({
 
 function PlanRow({
   plan,
+  subjects,
   supabase,
   onChanged,
 }: {
   plan: SubscriptionPlan;
+  subjects: LessonSubject[];
   supabase: SupabaseClient;
   onChanged: () => Promise<void>;
 }) {
@@ -396,11 +439,13 @@ function PlanRow({
     lessons_count: String(plan.lessons_count),
     validity_days: String(plan.validity_days),
     price: String(plan.price),
+    subject_id: plan.subject_id ?? "",
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const isSubscriptionKind = plan.kind === "subscription";
+  const showSubjectField = plan.kind !== "rental";
 
   function update<K extends keyof typeof form>(key: K, value: string) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -417,6 +462,7 @@ function PlanRow({
         lessons_count: isSubscriptionKind ? Number(form.lessons_count) || 0 : 1,
         validity_days: isSubscriptionKind ? Number(form.validity_days) || 0 : 0,
         price: Number(form.price) || 0,
+        subject_id: showSubjectField ? form.subject_id || null : null,
       })
       .eq("id", plan.id);
     setSaving(false);
@@ -451,6 +497,7 @@ function PlanRow({
             {plan.kind !== "subscription"
               ? `${KIND_LABELS[plan.kind]} · ${formatMoney(plan.price)}`
               : `${plan.lessons_count} занятий · ${plan.validity_days} дн. · ${formatMoney(plan.price)}`}
+            {plan.subject?.name ? ` · ${plan.subject.name}` : ""}
           </p>
           {plan.description && <p className="mt-1 text-xs text-slate-400">{plan.description}</p>}
         </div>
@@ -510,6 +557,23 @@ function PlanRow({
             </div>
           </>
         )}
+        {showSubjectField && (
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-600">Направление</label>
+            <select
+              value={form.subject_id}
+              onChange={(e) => update("subject_id", e.target.value)}
+              className={inputClass}
+            >
+              <option value="">Все направления</option>
+              {subjects.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
       <div className="mt-2">
         <label className="mb-1 block text-xs font-medium text-slate-600">Описание (необязательно)</label>
@@ -547,12 +611,14 @@ function AddPlanForm({
   duration,
   fixedKind,
   allowKindChoice,
+  subjects,
   onAdded,
 }: {
   supabase: SupabaseClient;
   duration: Duration;
   fixedKind?: PlanKind;
   allowKindChoice?: boolean;
+  subjects: LessonSubject[];
   onAdded: () => Promise<void>;
 }) {
   const [kind, setKind] = useState<PlanKind>(fixedKind ?? "subscription");
@@ -561,21 +627,27 @@ function AddPlanForm({
   const [lessonsCount, setLessonsCount] = useState("4");
   const [validityDays, setValidityDays] = useState("30");
   const [price, setPrice] = useState("");
+  const [subjectId, setSubjectId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const isSubscriptionKind = kind === "subscription";
+  const showSubjectField = kind !== "rental";
+  // Для абонемента нужно собственное название (например, "8 занятий за 2 месяца"),
+  // а для пробного/разового/аренды название не нужно — оно и так одно на всю
+  // колонку, поэтому подставляем его автоматически по типу тарифа.
+  const effectiveName = isSubscriptionKind ? name.trim() : KIND_LABELS[kind];
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim() || !price) {
-      setError("Укажите название и цену");
+    if (!effectiveName || !price) {
+      setError(isSubscriptionKind ? "Укажите название и цену" : "Укажите цену");
       return;
     }
     setSubmitting(true);
     setError(null);
     const { error: insertError } = await supabase.from("subscription_plans").insert({
-      name: name.trim(),
+      name: effectiveName,
       description: description.trim() || null,
       lessons_count: isSubscriptionKind ? Number(lessonsCount) || 0 : 1,
       validity_days: isSubscriptionKind ? Number(validityDays) || 0 : 0,
@@ -583,6 +655,7 @@ function AddPlanForm({
       is_active: true,
       duration_minutes: duration,
       kind,
+      subject_id: showSubjectField ? subjectId || null : null,
     });
     setSubmitting(false);
     if (insertError) {
@@ -594,6 +667,7 @@ function AddPlanForm({
     setLessonsCount("4");
     setValidityDays("30");
     setPrice("");
+    setSubjectId("");
     await onAdded();
   }
 
@@ -616,10 +690,12 @@ function AddPlanForm({
         </div>
       )}
       <div className="grid gap-2 sm:grid-cols-2">
-        <div>
-          <label className="mb-1 block text-xs font-medium text-slate-600">Название</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} required />
-        </div>
+        {isSubscriptionKind && (
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-600">Название</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} required />
+          </div>
+        )}
         <div>
           <label className="mb-1 block text-xs font-medium text-slate-600">Цена, ₽</label>
           <input
@@ -652,6 +728,23 @@ function AddPlanForm({
             </div>
           </>
         )}
+        {showSubjectField && (
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-600">Направление</label>
+            <select
+              value={subjectId}
+              onChange={(e) => setSubjectId(e.target.value)}
+              className={inputClass}
+            >
+              <option value="">Все направления</option>
+              {subjects.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
       <div>
         <label className="mb-1 block text-xs font-medium text-slate-600">Описание (необязательно)</label>
@@ -671,6 +764,93 @@ function AddPlanForm({
         {submitting ? "Добавляем…" : "Добавить тариф"}
       </button>
     </form>
+  );
+}
+
+// ---------- Направления занятий (справочник) ----------
+
+function SubjectsManager({
+  supabase,
+  subjects,
+  onChanged,
+}: {
+  supabase: SupabaseClient;
+  subjects: LessonSubject[];
+  onChanged: () => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function addSubject(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim()) return;
+    setSubmitting(true);
+    setError(null);
+    const { error: insertError } = await supabase
+      .from("lesson_subjects")
+      .insert({ name: name.trim(), is_active: true });
+    setSubmitting(false);
+    if (insertError) {
+      setError(insertError.message);
+      return;
+    }
+    setName("");
+    await onChanged();
+  }
+
+  async function toggleActive(subject: LessonSubject) {
+    await supabase
+      .from("lesson_subjects")
+      .update({ is_active: !subject.is_active })
+      .eq("id", subject.id);
+    await onChanged();
+  }
+
+  return (
+    <div className="rounded-2xl bg-white p-4 shadow-md">
+      <p className="mb-3 text-xs text-slate-500">
+        Список направлений занятий (вокал, фортепиано и т.д.) — используется при записи в
+        расписание и для тарифов с ценой по направлению.
+      </p>
+
+      {subjects.length === 0 ? (
+        <p className="mb-3 text-xs text-slate-400">Направления пока не добавлены</p>
+      ) : (
+        <div className="mb-3 space-y-1.5">
+          {subjects.map((s) => (
+            <div key={s.id} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-1.5">
+              <span className={`text-sm ${s.is_active ? "text-slate-800" : "text-slate-400 line-through"}`}>
+                {s.name}
+              </span>
+              <button
+                onClick={() => toggleActive(s)}
+                className="rounded-lg border border-slate-300 px-2 py-0.5 text-xs text-slate-600 hover:bg-white"
+              >
+                {s.is_active ? "Скрыть" : "Показать"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <form onSubmit={addSubject} className="flex gap-2">
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Новое направление…"
+          className="flex-1 rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+        />
+        <button
+          type="submit"
+          disabled={submitting}
+          className="rounded-lg bg-slate-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-60"
+        >
+          {submitting ? "…" : "Добавить"}
+        </button>
+      </form>
+      {error && <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
+    </div>
   );
 }
 
