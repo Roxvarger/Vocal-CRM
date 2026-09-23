@@ -51,10 +51,10 @@ export default async function TariffsPage({
   let personalRates: {
     id: string;
     student_id: string;
-    price: number;
-    teacher_amount: number;
+    price: number | null;
+    markup_amount: number | null;
     is_active: boolean;
-    mode: "fixed" | "rate_only";
+    mode: "fixed" | "rate_only" | "rate_plus_markup";
   }[] = [];
 
   if (isAdmin) {
@@ -67,7 +67,7 @@ export default async function TariffsPage({
 
     const { data: ratesData } = await supabase
       .from("personal_lesson_rates")
-      .select("id, student_id, price, teacher_amount, is_active, mode");
+      .select("id, student_id, price, markup_amount, is_active, mode");
     personalRates = ratesData ?? [];
   }
 
