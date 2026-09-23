@@ -41,7 +41,7 @@ export default async function TariffsPage({
   const { data: plans } = await supabase
     .from("subscription_plans")
     .select(
-      "id, name, description, lessons_count, validity_days, price, is_active, duration_minutes, kind"
+      "id, name, description, lessons_count, validity_days, price, is_active, duration_minutes, kind, subject_id, subject:subject_id(name)"
     )
     .order("price");
 
@@ -71,9 +71,16 @@ export default async function TariffsPage({
     personalRates = ratesData ?? [];
   }
 
+  // Справочник направлений занятий (вокал, фортепиано и т.д.) — используется
+  // и в записи в расписание, и здесь для тарифов с ценой по направлению.
+  const { data: subjectsData } = await supabase
+    .from("lesson_subjects")
+    .select("id, name, is_active")
+    .order("name");
+
   return (
     <main className="min-h-screen px-4 py-8">
-      <div className="mx-auto max-w-4xl">
+      <div className="mx-auto max-w-5xl">
         <div className="mb-4 flex items-center justify-between">
           <Link href="/dashboard" className="text-sm text-slate-500 hover:text-slate-700">
             ← Личный кабинет
@@ -82,10 +89,11 @@ export default async function TariffsPage({
 
         <TariffsClient
           isAdmin={isAdmin}
-          plans={plans ?? []}
+          plans={(plans as any) ?? []}
           students={students}
           initialPersonalRates={personalRates}
           initialStudentId={searchParams.student ?? null}
+          initialSubjects={subjectsData ?? []}
         />
       </div>
     </main>
