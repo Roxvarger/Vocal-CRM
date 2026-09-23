@@ -751,6 +751,11 @@ function IssueSubscriptionModal({
   const [planId, setPlanId] = useState(plans[0]?.id ?? "");
   const [locationId, setLocationId] = useState(locations[0]?.id ?? "");
   const [startsAt, setStartsAt] = useState(() => new Date().toISOString().slice(0, 10));
+  // По умолчанию считаем, что оплата получена сразу при выдаче (обычная практика) —
+  // но можно снять галочку, если абонемент выдаётся до фактической оплаты
+  // (например, ждём перевод). Пока не отмечено оплаченным — занятия по этому
+  // абонементу будут показываться в расписании как неоплаченные (красная рамка).
+  const [isPaid, setIsPaid] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -780,6 +785,10 @@ function IssueSubscriptionModal({
       starts_at: starts.toISOString(),
       expires_at: expires.toISOString(),
       created_by: currentUser.id,
+      is_paid: isPaid,
+      payment_amount: isPaid ? plan.price : null,
+      paid_at: isPaid ? new Date().toISOString() : null,
+      paid_by: isPaid ? currentUser.id : null,
     });
 
     setSubmitting(false);
@@ -843,6 +852,16 @@ function IssueSubscriptionModal({
                 {new Date(
                   new Date(`${startsAt}T00:00:00`).getTime() + plan.validity_days * 86400000
                 ).toLocaleDateString("ru-RU")}
+              </p>
+            )}
+            <label className="flex items-center gap-2 text-sm text-slate-600">
+              <input type="checkbox" checked={isPaid} onChange={(e) => setIsPaid(e.target.checked)} />
+              Оплата получена сейчас
+            </label>
+            {!isPaid && (
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                Пока оплата не отмечена, занятия по этому абонементу будут показываться в расписании
+                как неоплаченные. Отметить оплату позже можно в разделе «Оплата занятий».
               </p>
             )}
             {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
