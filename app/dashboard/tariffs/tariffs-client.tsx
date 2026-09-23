@@ -26,17 +26,19 @@ type LessonSubject = { id: string; name: string; is_active: boolean };
 
 type StudentOption = { id: string; full_name: string };
 
-// Три варианта персональных условий:
+// Три варианта персональных условий. Ставка самого преподавателя сюда не входит —
+// она задаётся один раз в разделе «Преподаватели» и подставляется по факту занятия
+// (в зависимости от того, кто именно ведёт), поэтому здесь её не вводят и не хранят:
 // - rate_only: ученик платит ровно ставку преподавателя, студия ничего не добавляет
-// - fixed: просто фиксированная цена занятия для этого ученика
-// - rate_plus_markup: ставка преподавателя + фиксированная надбавка студии сверху
+// - fixed: просто фиксированная цена занятия для этого ученика, без привязки к ставке
+// - rate_plus_markup: ставка преподавателя (по факту занятия) + фиксированная надбавка студии
 type PersonalRateMode = "fixed" | "rate_only" | "rate_plus_markup";
 
 type PersonalRate = {
   id: string;
   student_id: string;
-  price: number;
-  teacher_amount: number;
+  price: number | null;
+  markup_amount: number | null;
   is_active: boolean;
   mode: PersonalRateMode;
 };
@@ -63,15 +65,12 @@ function formatMoney(n: number): string {
 
 function describeRate(rate: PersonalRate): string {
   if (rate.mode === "rate_only") {
-    return `Только ставка преподавателя — ${formatMoney(rate.teacher_amount)}`;
+    return "Только ставка преподавателя (по факту занятия)";
   }
   if (rate.mode === "rate_plus_markup") {
-    const markup = rate.price - rate.teacher_amount;
-    return `Ставка ${formatMoney(rate.teacher_amount)} + надбавка ${formatMoney(markup)} = ${formatMoney(
-      rate.price
-    )}`;
+    return `Ставка преподавателя + надбавка ${formatMoney(rate.markup_amount ?? 0)}`;
   }
-  return `Фиксированная цена — ${formatMoney(rate.price)}`;
+  return `Фиксированная цена — ${formatMoney(rate.price ?? 0)}`;
 }
 
 // ---------- Модальное окно ----------
@@ -266,7 +265,7 @@ function AdminTariffs({
   async function reloadPersonalRates() {
     const { data } = await supabase
       .from("personal_lesson_rates")
-      .select("id, student_id, price, teacher_amount, is_active, mode");
+      .select("id, student_id, price, markup_amount, is_active, mode");
     setPersonalRates(data ?? []);
   }
 
@@ -1043,12 +1042,9 @@ function PersonalRateEditor({
 }) {
   const [enabled, setEnabled] = useState(rate?.is_active ?? true);
   const [mode, setMode] = useState<PersonalRateMode>(rate?.mode ?? "fixed");
-  const [price, setPrice] = useState(rate && rate.mode === "fixed" ? String(rate.price) : "");
-  const [teacherAmount, setTeacherAmount] = useState(
-    rate && rate.mode !== "fixed" ? String(rate.teacher_amount) : ""
-  );
+  const [price, setPrice] = useState(rate && rate.mode === "fixed" ? String(rate.price ?? "") : "");
   const [markup, setMarkup] = useState(
-    rate && rate.mode === "rate_plus_markup" ? String(rate.price - rate.teacher_amount) : ""
+    rate && rate.mode === "rate_plus_markup" ? String(rate.markup_amount ?? "") : ""
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1057,28 +1053,20 @@ function PersonalRateEditor({
     setSaving(true);
     setError(null);
 
-    let priceValue = 0;
-    let teacherAmountValue = 0;
-
-    if (mode === "rate_only") {
-      // Ученик платит ровно ставку преподавателя — студия ничего не добавляет сверху.
-      teacherAmountValue = Number(teacherAmount) || 0;
-      priceValue = teacherAmountValue;
-    } else if (mode === "rate_plus_markup") {
-      teacherAmountValue = Number(teacherAmount) || 0;
-      priceValue = teacherAmountValue + (Number(markup) || 0);
-    } else {
-      // fixed — просто индивидуальная цена занятия, без привязки к ставке
-      priceValue = Number(price) || 0;
-      teacherAmountValue = 0;
-    }
-
-    const payload = {
-      price: priceValue,
-      teacher_amount: teacherAmountValue,
-      is_active: enabled,
-      mode,
-    };
+    // Ставка самого преподавателя сюда не входит — она задаётся в разделе
+    // «Преподаватели» и подставляется по факту занятия, в зависимости от того,
+    // кто именно ведёт. Здесь фиксируем только то, что относится к ученику.
+    const payload: {
+      price: number | null;
+      markup_amount: number | null;
+      is_active: boolean;
+      mode: PersonalRateMode;
+    } =
+      mode === "fixed"
+        ? { price: Number(price) || 0, markup_amount: null, is_active: enabled, mode }
+        : mode === "rate_plus_markup"
+        ? { price: null, markup_amount: Number(markup) || 0, is_active: enabled, mode }
+        : { price: null, markup_amount: null, is_active: enabled, mode };
 
     if (rate) {
       const { error: updateError } = await supabase
@@ -1147,44 +1135,24 @@ function PersonalRateEditor({
       )}
 
       {mode === "rate_only" && (
-        <div className="grid gap-2 sm:grid-cols-2">
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-600">Ставка преподавателя, ₽</label>
-            <input
-              type="number"
-              value={teacherAmount}
-              onChange={(e) => setTeacherAmount(e.target.value)}
-              className={inputClass}
-            />
-          </div>
-          <p className="self-end pb-1.5 text-xs text-slate-400">
-            Ученик платит ровно эту сумму — студия ничего не добавляет сверху
-          </p>
-        </div>
+        <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+          Ученик платит ровно ставку преподавателя, актуальную на момент занятия (раздел
+          «Преподаватели») — студия ничего не добавляет сверху. Отдельно указывать ставку здесь
+          не нужно.
+        </p>
       )}
 
       {mode === "rate_plus_markup" && (
-        <div className="grid gap-2 sm:grid-cols-2">
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-600">Ставка преподавателя, ₽</label>
-            <input
-              type="number"
-              value={teacherAmount}
-              onChange={(e) => setTeacherAmount(e.target.value)}
-              className={inputClass}
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-600">Надбавка студии, ₽</label>
-            <input
-              type="number"
-              value={markup}
-              onChange={(e) => setMarkup(e.target.value)}
-              className={inputClass}
-            />
-          </div>
-          <p className="text-xs text-slate-400 sm:col-span-2">
-            Ученик заплатит {formatMoney((Number(teacherAmount) || 0) + (Number(markup) || 0))}
+        <div>
+          <label className="mb-1 block text-xs font-medium text-slate-600">Надбавка студии, ₽</label>
+          <input
+            type="number"
+            value={markup}
+            onChange={(e) => setMarkup(e.target.value)}
+            className={inputClass}
+          />
+          <p className="mt-1 text-xs text-slate-400">
+            К этой сумме прибавится ставка преподавателя (раздел «Преподаватели») на момент занятия
           </p>
         </div>
       )}
