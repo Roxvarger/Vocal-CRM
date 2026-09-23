@@ -78,6 +78,18 @@ export default async function DashboardPage() {
             </div>
           )}
 
+          {(profile?.role === "admin" || profile?.role === "manager") && (
+            <Link
+              href="/dashboard/payments"
+              className="rounded-2xl bg-white p-6 shadow-md transition hover:shadow-lg"
+            >
+              <h2 className="font-semibold text-slate-800">Оплата занятий</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Отметка оплаты разовых и пробных занятий
+              </p>
+            </Link>
+          )}
+
           {profile?.role !== "student" && (
             <Link
               href="/dashboard/tariffs"
