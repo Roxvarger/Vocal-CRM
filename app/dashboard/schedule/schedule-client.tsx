@@ -1218,9 +1218,10 @@ function BulkCancelModal({
   const [scope, setScope] = useState<"teacher" | "all">("teacher");
   const [teacherId, setTeacherId] = useState(restrictToSelf ? currentUser.id : teacherOptions[0]?.id ?? "");
   const [reason, setReason] = useState("");
-  // Массовая отмена всегда инициируется студией или преподавателем — по умолчанию
-  // оплата/занятие абонемента НЕ списывается, но можно включить вручную.
-  const [charged, setCharged] = useState(false);
+  // Массовая отмена всегда инициируется студией или преподавателем (болезнь,
+  // закрытие) — оплата/занятие абонемента никогда не списывается, поэтому такой
+  // возможности здесь нет вовсе (в отличие от отмены одного занятия).
+  const charged = false;
   const [rows, setRows] = useState<Record<string, { include: boolean; notified: boolean }>>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1359,11 +1360,6 @@ function BulkCancelModal({
             placeholder="Например: болезнь преподавателя, закрытие студии"
           />
         </div>
-
-        <label className="mb-4 flex items-center gap-2 text-sm text-slate-600">
-          <input type="checkbox" checked={charged} onChange={(e) => setCharged(e.target.checked)} />
-          Списывать оплату / занятие абонемента за эти отмены
-        </label>
 
         {error && <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
 
