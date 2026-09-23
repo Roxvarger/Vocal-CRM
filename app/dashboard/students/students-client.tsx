@@ -65,13 +65,24 @@ type Subscription = {
   plan: { name: string } | null;
 };
 
+type PersonalRateMode = "fixed" | "rate_only" | "rate_plus_markup";
+
 type PersonalRate = {
   id: string;
   student_id: string;
-  price: number;
-  teacher_amount: number;
+  price: number | null;
+  markup_amount: number | null;
   is_active: boolean;
+  mode: PersonalRateMode;
 };
+
+function describePersonalRate(rate: PersonalRate): string {
+  if (rate.mode === "rate_only") return "Только ставка преподавателя (по факту занятия)";
+  if (rate.mode === "rate_plus_markup") {
+    return `Ставка преподавателя + надбавка ${formatMoney(rate.markup_amount ?? 0)}`;
+  }
+  return `Фиксированная цена — ${formatMoney(rate.price ?? 0)}`;
+}
 
 type SupabaseClient = ReturnType<typeof createClient>;
 
@@ -146,7 +157,7 @@ export default function StudentsClient({
   async function loadPersonalRates() {
     const { data } = await supabase
       .from("personal_lesson_rates")
-      .select("id, student_id, price, teacher_amount, is_active");
+      .select("id, student_id, price, markup_amount, is_active, mode");
     setPersonalRates(data ?? []);
   }
 
@@ -585,10 +596,7 @@ function StudentDetailModal({
               </Link>
             </div>
             {personalRate?.is_active ? (
-              <p className="mt-1 text-xs text-pink-600">
-                Назначены: {formatMoney(personalRate.price)} за занятие, преподавателю{" "}
-                {formatMoney(personalRate.teacher_amount)}
-              </p>
+              <p className="mt-1 text-xs text-pink-600">Назначены: {describePersonalRate(personalRate)}</p>
             ) : (
               <p className="mt-1 text-xs text-slate-400">Не назначены</p>
             )}
