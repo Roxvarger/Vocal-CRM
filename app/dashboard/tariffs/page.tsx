@@ -40,7 +40,9 @@ export default async function TariffsPage({
   // и так это ограничивает на уровне базы — здесь просто читаем список.
   const { data: plans } = await supabase
     .from("subscription_plans")
-    .select("id, name, description, lessons_count, validity_days, price, is_active")
+    .select(
+      "id, name, description, lessons_count, validity_days, price, is_active, duration_minutes, kind"
+    )
     .order("price");
 
   // Персональные условия — прерогатива только админа, поэтому подтягиваем
@@ -52,6 +54,7 @@ export default async function TariffsPage({
     price: number;
     teacher_amount: number;
     is_active: boolean;
+    mode: "fixed" | "rate_only";
   }[] = [];
 
   if (isAdmin) {
@@ -64,7 +67,7 @@ export default async function TariffsPage({
 
     const { data: ratesData } = await supabase
       .from("personal_lesson_rates")
-      .select("id, student_id, price, teacher_amount, is_active");
+      .select("id, student_id, price, teacher_amount, is_active, mode");
     personalRates = ratesData ?? [];
   }
 
