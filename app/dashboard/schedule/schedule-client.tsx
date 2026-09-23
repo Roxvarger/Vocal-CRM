@@ -15,7 +15,7 @@ type CurrentUser = {
 
 type Location = { id: string; name: string };
 type Room = { id: string; name: string };
-type PersonOption = { id: string; full_name: string };
+type PersonOption = { id: string; full_name: string; short_name?: string | null };
 // Персональные условия теперь привязаны к конкретному ученику (а не выбираются
 // из общего списка тарифов) — если ученик есть в этой таблице, все его занятия
 // автоматически идут как "Персональное".
@@ -427,7 +427,7 @@ export default function ScheduleClient({
     if (isAdmin || canManageView) {
       supabase
         .from("profiles")
-        .select("id, full_name")
+        .select("id, full_name, short_name")
         .eq("role", "teacher")
         .order("full_name")
         .then(({ data }) => setTeachers(data ?? []));
@@ -619,7 +619,7 @@ export default function ScheduleClient({
                   className={pillClass(viewFilterId === t.id)}
                   onClick={() => setViewFilterId(t.id)}
                 >
-                  {t.full_name}
+                  {t.short_name || t.full_name}
                 </button>
               ))}
             </div>
