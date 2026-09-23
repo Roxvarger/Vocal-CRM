@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
 // ---------- Типы ----------
+
+type Duration = 30 | 50;
+type PlanKind = "trial" | "single" | "subscription" | "rental";
 
 type SubscriptionPlan = {
   id: string;
@@ -13,9 +16,13 @@ type SubscriptionPlan = {
   validity_days: number;
   price: number;
   is_active: boolean;
+  duration_minutes: Duration;
+  kind: PlanKind;
 };
 
 type StudentOption = { id: string; full_name: string };
+
+type PersonalRateMode = "fixed" | "rate_only";
 
 type PersonalRate = {
   id: string;
@@ -23,9 +30,22 @@ type PersonalRate = {
   price: number;
   teacher_amount: number;
   is_active: boolean;
+  mode: PersonalRateMode;
 };
 
 type SupabaseClient = ReturnType<typeof createClient>;
+
+const KIND_LABELS: Record<PlanKind, string> = {
+  trial: "Пробное занятие",
+  single: "Разовое занятие",
+  subscription: "Абонемент",
+  rental: "Аренда",
+};
+
+const DURATION_LABELS: Record<Duration, string> = {
+  30: "Для самых маленьких (30 мин)",
+  50: "Полноценное занятие (50 мин)",
+};
 
 // ---------- Вспомогательные функции ----------
 
@@ -69,6 +89,8 @@ export default function TariffsClient({
 
 function GeneralPriceListReadOnly({ plans }: { plans: SubscriptionPlan[] }) {
   const activePlans = plans.filter((p) => p.is_active);
+  const lessonPlans = activePlans.filter((p) => p.kind !== "rental");
+  const rentalPlans = activePlans.filter((p) => p.kind === "rental");
 
   return (
     <div>
@@ -78,24 +100,61 @@ function GeneralPriceListReadOnly({ plans }: { plans: SubscriptionPlan[] }) {
         главный администратор.
       </p>
 
-      {activePlans.length === 0 ? (
+      {lessonPlans.length === 0 ? (
         <p className="text-sm text-slate-400">Тарифы пока не добавлены</p>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
-          {activePlans.map((p) => (
-            <div key={p.id} className="rounded-2xl bg-white p-4 shadow-md">
-              <div className="flex items-center justify-between">
-                <h3 className="font-semibold text-slate-800">{p.name}</h3>
-                <span className="text-base font-semibold text-slate-800">{formatMoney(p.price)}</span>
+        <div className="grid gap-4 sm:grid-cols-2">
+          {([30, 50] as Duration[]).map((d) => (
+            <div key={d}>
+              <h2 className="mb-2 text-sm font-semibold text-slate-600">{DURATION_LABELS[d]}</h2>
+              <div className="space-y-2">
+                {lessonPlans
+                  .filter((p) => p.duration_minutes === d)
+                  .map((p) => (
+                    <PlanCardReadOnly key={p.id} plan={p} />
+                  ))}
               </div>
-              <p className="mt-1 text-xs text-slate-500">
-                {p.lessons_count} занятий · действует {p.validity_days} дн.
-              </p>
-              {p.description && <p className="mt-2 text-sm text-slate-500">{p.description}</p>}
             </div>
           ))}
         </div>
       )}
+
+      {rentalPlans.length > 0 && (
+        <div className="mt-6">
+          <h2 className="mb-2 text-base font-semibold text-slate-800">Аренда</h2>
+          <div className="grid gap-4 sm:grid-cols-2">
+            {([30, 50] as Duration[]).map((d) => (
+              <div key={d}>
+                <h3 className="mb-2 text-sm font-semibold text-slate-600">{d} мин</h3>
+                <div className="space-y-2">
+                  {rentalPlans
+                    .filter((p) => p.duration_minutes === d)
+                    .map((p) => (
+                      <PlanCardReadOnly key={p.id} plan={p} />
+                    ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PlanCardReadOnly({ plan }: { plan: SubscriptionPlan }) {
+  return (
+    <div className="rounded-2xl bg-white p-4 shadow-md">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-slate-800">{plan.name}</h3>
+        <span className="text-base font-semibold text-slate-800">{formatMoney(plan.price)}</span>
+      </div>
+      <p className="mt-1 text-xs text-slate-500">
+        {plan.kind === "subscription"
+          ? `${plan.lessons_count} занятий · действует ${plan.validity_days} дн.`
+          : KIND_LABELS[plan.kind]}
+      </p>
+      {plan.description && <p className="mt-2 text-sm text-slate-500">{plan.description}</p>}
     </div>
   );
 }
@@ -119,12 +178,12 @@ function AdminTariffs({
   const [personalRates, setPersonalRates] = useState<PersonalRate[]>(initialPersonalRates);
   const [search, setSearch] = useState("");
   const [studentId, setStudentId] = useState<string | null>(initialStudentId);
-  const [addFormOpen, setAddFormOpen] = useState(false);
+  const [personalOpen, setPersonalOpen] = useState(Boolean(initialStudentId));
 
   async function reloadPlans() {
     const { data } = await supabase
       .from("subscription_plans")
-      .select("id, name, description, lessons_count, validity_days, price, is_active")
+      .select("id, name, description, lessons_count, validity_days, price, is_active, duration_minutes, kind")
       .order("price");
     setPlans(data ?? []);
   }
@@ -132,7 +191,7 @@ function AdminTariffs({
   async function reloadPersonalRates() {
     const { data } = await supabase
       .from("personal_lesson_rates")
-      .select("id, student_id, price, teacher_amount, is_active");
+      .select("id, student_id, price, teacher_amount, is_active, mode");
     setPersonalRates(data ?? []);
   }
 
@@ -150,6 +209,9 @@ function AdminTariffs({
 
   const student = students.find((s) => s.id === studentId) ?? null;
 
+  const lessonPlans = plans.filter((p) => p.kind !== "rental");
+  const rentalPlans = plans.filter((p) => p.kind === "rental");
+
   return (
     <div className="space-y-8">
       <div>
@@ -161,90 +223,157 @@ function AdminTariffs({
       </div>
 
       <section>
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-slate-800">Общие тарифы</h2>
-          <button
-            onClick={() => setAddFormOpen((v) => !v)}
-            className="rounded-lg bg-slate-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
-          >
-            {addFormOpen ? "Отмена" : "+ Добавить тариф"}
-          </button>
+        <h2 className="mb-3 text-base font-semibold text-slate-800">Общие тарифы</h2>
+        <div className="grid gap-4 sm:grid-cols-2">
+          {([30, 50] as Duration[]).map((d) => (
+            <TariffColumn
+              key={d}
+              title={DURATION_LABELS[d]}
+              duration={d}
+              allowKindChoice
+              plans={lessonPlans.filter((p) => p.duration_minutes === d)}
+              supabase={supabase}
+              onChanged={reloadPlans}
+            />
+          ))}
         </div>
-
-        {addFormOpen && (
-          <AddPlanForm
-            supabase={supabase}
-            onAdded={async () => {
-              setAddFormOpen(false);
-              await reloadPlans();
-            }}
-          />
-        )}
-
-        {plans.length === 0 ? (
-          <p className="text-sm text-slate-400">Тарифы пока не добавлены</p>
-        ) : (
-          <div className="space-y-2">
-            {plans.map((p) => (
-              <PlanRow key={p.id} plan={p} supabase={supabase} onChanged={reloadPlans} />
-            ))}
-          </div>
-        )}
       </section>
 
       <section>
-        <h2 className="mb-3 text-base font-semibold text-slate-800">
-          Персональные условия учеников
-        </h2>
-        <div className="grid gap-4 sm:grid-cols-[240px_1fr]">
-          <div>
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Поиск ученика…"
-              className="mb-2 w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
+        <h2 className="mb-3 text-base font-semibold text-slate-800">Аренда</h2>
+        <div className="grid gap-4 sm:grid-cols-2">
+          {([30, 50] as Duration[]).map((d) => (
+            <TariffColumn
+              key={d}
+              title={`${d} мин`}
+              duration={d}
+              fixedKind="rental"
+              plans={rentalPlans.filter((p) => p.duration_minutes === d)}
+              supabase={supabase}
+              onChanged={reloadPlans}
             />
-            <div className="max-h-[60vh] overflow-y-auto rounded-2xl bg-white shadow-md">
-              {filteredStudents.length === 0 ? (
-                <p className="p-3 text-xs text-slate-400">Ученики не найдены</p>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <button
+          onClick={() => setPersonalOpen((v) => !v)}
+          className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+        >
+          {personalOpen ? "Скрыть персональные условия" : "Персональные условия учеников →"}
+        </button>
+
+        {personalOpen && (
+          <div className="mt-4 grid gap-4 sm:grid-cols-[240px_1fr]">
+            <div>
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Поиск ученика…"
+                className="mb-2 w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
+              />
+              <div className="max-h-[60vh] overflow-y-auto rounded-2xl bg-white shadow-md">
+                {filteredStudents.length === 0 ? (
+                  <p className="p-3 text-xs text-slate-400">Ученики не найдены</p>
+                ) : (
+                  filteredStudents.map((s) => {
+                    const rate = personalRateByStudent[s.id];
+                    return (
+                      <button
+                        key={s.id}
+                        onClick={() => setStudentId(s.id)}
+                        className={`flex w-full items-center justify-between border-b border-slate-50 px-3 py-2 text-left text-sm last:border-0 hover:bg-slate-50 ${
+                          s.id === studentId ? "bg-slate-100 font-medium text-slate-800" : "text-slate-600"
+                        }`}
+                      >
+                        <span>{s.full_name}</span>
+                        {rate?.is_active && <span className="h-2 w-2 rounded-full bg-pink-400" />}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            <div>
+              {!student ? (
+                <p className="text-sm text-slate-400">
+                  Выберите ученика слева, чтобы назначить или изменить его персональные условия
+                </p>
               ) : (
-                filteredStudents.map((s) => {
-                  const rate = personalRateByStudent[s.id];
-                  return (
-                    <button
-                      key={s.id}
-                      onClick={() => setStudentId(s.id)}
-                      className={`flex w-full items-center justify-between border-b border-slate-50 px-3 py-2 text-left text-sm last:border-0 hover:bg-slate-50 ${
-                        s.id === studentId ? "bg-slate-100 font-medium text-slate-800" : "text-slate-600"
-                      }`}
-                    >
-                      <span>{s.full_name}</span>
-                      {rate?.is_active && <span className="h-2 w-2 rounded-full bg-pink-400" />}
-                    </button>
-                  );
-                })
+                <PersonalRateEditor
+                  key={student.id}
+                  student={student}
+                  rate={personalRateByStudent[student.id]}
+                  supabase={supabase}
+                  onChanged={reloadPersonalRates}
+                />
               )}
             </div>
           </div>
-
-          <div>
-            {!student ? (
-              <p className="text-sm text-slate-400">
-                Выберите ученика слева, чтобы назначить или изменить его персональные условия
-              </p>
-            ) : (
-              <PersonalRateEditor
-                key={student.id}
-                student={student}
-                rate={personalRateByStudent[student.id]}
-                supabase={supabase}
-                onChanged={reloadPersonalRates}
-              />
-            )}
-          </div>
-        </div>
+        )}
       </section>
+    </div>
+  );
+}
+
+// ---------- Колонка тарифов (одна длительность) ----------
+
+function TariffColumn({
+  title,
+  duration,
+  plans,
+  supabase,
+  onChanged,
+  fixedKind,
+  allowKindChoice,
+}: {
+  title: string;
+  duration: Duration;
+  plans: SubscriptionPlan[];
+  supabase: SupabaseClient;
+  onChanged: () => Promise<void>;
+  fixedKind?: PlanKind;
+  allowKindChoice?: boolean;
+}) {
+  const [addFormOpen, setAddFormOpen] = useState(false);
+
+  return (
+    <div className="rounded-2xl bg-slate-50 p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-slate-700">{title}</h3>
+        <button
+          onClick={() => setAddFormOpen((v) => !v)}
+          className="rounded-lg bg-slate-800 px-2.5 py-1 text-xs font-medium text-white hover:bg-slate-700"
+        >
+          {addFormOpen ? "Отмена" : "+ Добавить"}
+        </button>
+      </div>
+
+      {addFormOpen && (
+        <AddPlanForm
+          supabase={supabase}
+          duration={duration}
+          fixedKind={fixedKind}
+          allowKindChoice={allowKindChoice}
+          onAdded={async () => {
+            setAddFormOpen(false);
+            await onChanged();
+          }}
+        />
+      )}
+
+      {plans.length === 0 ? (
+        <p className="text-xs text-slate-400">Тарифы пока не добавлены</p>
+      ) : (
+        <div className="space-y-2">
+          {plans.map((p) => (
+            <PlanRow key={p.id} plan={p} supabase={supabase} onChanged={onChanged} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -271,6 +400,8 @@ function PlanRow({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const isSubscriptionKind = plan.kind === "subscription";
+
   function update<K extends keyof typeof form>(key: K, value: string) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
@@ -283,8 +414,8 @@ function PlanRow({
       .update({
         name: form.name,
         description: form.description || null,
-        lessons_count: Number(form.lessons_count) || 0,
-        validity_days: Number(form.validity_days) || 0,
+        lessons_count: isSubscriptionKind ? Number(form.lessons_count) || 0 : 1,
+        validity_days: isSubscriptionKind ? Number(form.validity_days) || 0 : 0,
         price: Number(form.price) || 0,
       })
       .eq("id", plan.id);
@@ -306,18 +437,20 @@ function PlanRow({
 
   if (!editing) {
     return (
-      <div className="flex items-center justify-between rounded-2xl bg-white p-4 shadow-md">
+      <div className="flex items-center justify-between rounded-2xl bg-white p-3 shadow-md">
         <div>
           <div className="flex items-center gap-2">
-            <h3 className={`font-semibold ${plan.is_active ? "text-slate-800" : "text-slate-400 line-through"}`}>
+            <h4 className={`text-sm font-semibold ${plan.is_active ? "text-slate-800" : "text-slate-400 line-through"}`}>
               {plan.name}
-            </h3>
+            </h4>
             {!plan.is_active && (
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-400">Скрыт</span>
             )}
           </div>
           <p className="text-xs text-slate-500">
-            {plan.lessons_count} занятий · {plan.validity_days} дн. · {formatMoney(plan.price)}
+            {plan.kind !== "subscription"
+              ? `${KIND_LABELS[plan.kind]} · ${formatMoney(plan.price)}`
+              : `${plan.lessons_count} занятий · ${plan.validity_days} дн. · ${formatMoney(plan.price)}`}
           </p>
           {plan.description && <p className="mt-1 text-xs text-slate-400">{plan.description}</p>}
         </div>
@@ -340,7 +473,7 @@ function PlanRow({
   }
 
   return (
-    <div className="rounded-2xl bg-white p-4 shadow-md">
+    <div className="rounded-2xl bg-white p-3 shadow-md">
       <div className="grid gap-2 sm:grid-cols-2">
         <div>
           <label className="mb-1 block text-xs font-medium text-slate-600">Название</label>
@@ -355,24 +488,28 @@ function PlanRow({
             className={inputClass}
           />
         </div>
-        <div>
-          <label className="mb-1 block text-xs font-medium text-slate-600">Занятий в абонементе</label>
-          <input
-            type="number"
-            value={form.lessons_count}
-            onChange={(e) => update("lessons_count", e.target.value)}
-            className={inputClass}
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-xs font-medium text-slate-600">Срок действия, дней</label>
-          <input
-            type="number"
-            value={form.validity_days}
-            onChange={(e) => update("validity_days", e.target.value)}
-            className={inputClass}
-          />
-        </div>
+        {isSubscriptionKind && (
+          <>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-600">Занятий в абонементе</label>
+              <input
+                type="number"
+                value={form.lessons_count}
+                onChange={(e) => update("lessons_count", e.target.value)}
+                className={inputClass}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-600">Срок действия, дней</label>
+              <input
+                type="number"
+                value={form.validity_days}
+                onChange={(e) => update("validity_days", e.target.value)}
+                className={inputClass}
+              />
+            </div>
+          </>
+        )}
       </div>
       <div className="mt-2">
         <label className="mb-1 block text-xs font-medium text-slate-600">Описание (необязательно)</label>
@@ -407,11 +544,18 @@ function PlanRow({
 
 function AddPlanForm({
   supabase,
+  duration,
+  fixedKind,
+  allowKindChoice,
   onAdded,
 }: {
   supabase: SupabaseClient;
+  duration: Duration;
+  fixedKind?: PlanKind;
+  allowKindChoice?: boolean;
   onAdded: () => Promise<void>;
 }) {
+  const [kind, setKind] = useState<PlanKind>(fixedKind ?? "subscription");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [lessonsCount, setLessonsCount] = useState("4");
@@ -419,6 +563,8 @@ function AddPlanForm({
   const [price, setPrice] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const isSubscriptionKind = kind === "subscription";
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -431,10 +577,12 @@ function AddPlanForm({
     const { error: insertError } = await supabase.from("subscription_plans").insert({
       name: name.trim(),
       description: description.trim() || null,
-      lessons_count: Number(lessonsCount) || 0,
-      validity_days: Number(validityDays) || 0,
+      lessons_count: isSubscriptionKind ? Number(lessonsCount) || 0 : 1,
+      validity_days: isSubscriptionKind ? Number(validityDays) || 0 : 0,
       price: Number(price) || 0,
       is_active: true,
+      duration_minutes: duration,
+      kind,
     });
     setSubmitting(false);
     if (insertError) {
@@ -452,7 +600,21 @@ function AddPlanForm({
   const inputClass = "w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm";
 
   return (
-    <form onSubmit={handleSubmit} className="mb-3 space-y-2 rounded-2xl bg-slate-50 p-4">
+    <form onSubmit={handleSubmit} className="mb-3 space-y-2 rounded-2xl bg-white p-3 shadow-inner">
+      {allowKindChoice && !fixedKind && (
+        <div>
+          <label className="mb-1 block text-xs font-medium text-slate-600">Тип тарифа</label>
+          <select
+            value={kind}
+            onChange={(e) => setKind(e.target.value as PlanKind)}
+            className={inputClass}
+          >
+            <option value="trial">Пробное занятие</option>
+            <option value="single">Разовое занятие</option>
+            <option value="subscription">Абонемент</option>
+          </select>
+        </div>
+      )}
       <div className="grid gap-2 sm:grid-cols-2">
         <div>
           <label className="mb-1 block text-xs font-medium text-slate-600">Название</label>
@@ -468,24 +630,28 @@ function AddPlanForm({
             required
           />
         </div>
-        <div>
-          <label className="mb-1 block text-xs font-medium text-slate-600">Занятий в абонементе</label>
-          <input
-            type="number"
-            value={lessonsCount}
-            onChange={(e) => setLessonsCount(e.target.value)}
-            className={inputClass}
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-xs font-medium text-slate-600">Срок действия, дней</label>
-          <input
-            type="number"
-            value={validityDays}
-            onChange={(e) => setValidityDays(e.target.value)}
-            className={inputClass}
-          />
-        </div>
+        {isSubscriptionKind && (
+          <>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-600">Занятий в абонементе</label>
+              <input
+                type="number"
+                value={lessonsCount}
+                onChange={(e) => setLessonsCount(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-600">Срок действия, дней</label>
+              <input
+                type="number"
+                value={validityDays}
+                onChange={(e) => setValidityDays(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+          </>
+        )}
       </div>
       <div>
         <label className="mb-1 block text-xs font-medium text-slate-600">Описание (необязательно)</label>
@@ -522,6 +688,7 @@ function PersonalRateEditor({
   onChanged: () => Promise<void>;
 }) {
   const [enabled, setEnabled] = useState(rate?.is_active ?? false);
+  const [mode, setMode] = useState<PersonalRateMode>(rate?.mode ?? "fixed");
   const [price, setPrice] = useState(rate ? String(rate.price) : "");
   const [teacherAmount, setTeacherAmount] = useState(rate ? String(rate.teacher_amount) : "");
   const [saving, setSaving] = useState(false);
@@ -531,13 +698,19 @@ function PersonalRateEditor({
     setSaving(true);
     setError(null);
 
+    // В режиме "только ставка преподавателя" студия ничего не добавляет сверху —
+    // ученик платит ровно ставку преподавателя, поэтому цена и выплата совпадают.
+    const teacherAmountValue = Number(teacherAmount) || 0;
+    const priceValue = mode === "rate_only" ? teacherAmountValue : Number(price) || 0;
+
     if (rate) {
       const { error: updateError } = await supabase
         .from("personal_lesson_rates")
         .update({
-          price: Number(price) || 0,
-          teacher_amount: Number(teacherAmount) || 0,
+          price: priceValue,
+          teacher_amount: teacherAmountValue,
           is_active: enabled,
+          mode,
         })
         .eq("id", rate.id);
       setSaving(false);
@@ -548,9 +721,10 @@ function PersonalRateEditor({
     } else {
       const { error: insertError } = await supabase.from("personal_lesson_rates").insert({
         student_id: student.id,
-        price: Number(price) || 0,
-        teacher_amount: Number(teacherAmount) || 0,
+        price: priceValue,
+        teacher_amount: teacherAmountValue,
         is_active: enabled,
+        mode,
       });
       setSaving(false);
       if (insertError) {
@@ -573,26 +747,62 @@ function PersonalRateEditor({
         </label>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-2">
-        <div>
-          <label className="mb-1 block text-xs font-medium text-slate-600">Цена занятия для ученика, ₽</label>
+      <div className="mb-3 flex gap-4 text-sm">
+        <label className="flex items-center gap-1.5">
           <input
-            type="number"
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-            className={inputClass}
+            type="radio"
+            checked={mode === "fixed"}
+            onChange={() => setMode("fixed")}
           />
-        </div>
-        <div>
-          <label className="mb-1 block text-xs font-medium text-slate-600">Выплата преподавателю, ₽</label>
+          Фиксированная цена занятия
+        </label>
+        <label className="flex items-center gap-1.5">
           <input
-            type="number"
-            value={teacherAmount}
-            onChange={(e) => setTeacherAmount(e.target.value)}
-            className={inputClass}
+            type="radio"
+            checked={mode === "rate_only"}
+            onChange={() => setMode("rate_only")}
           />
-        </div>
+          Оплата только ставки преподавателя
+        </label>
       </div>
+
+      {mode === "fixed" ? (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-600">Цена занятия для ученика, ₽</label>
+            <input
+              type="number"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+              className={inputClass}
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-600">Выплата преподавателю, ₽</label>
+            <input
+              type="number"
+              value={teacherAmount}
+              onChange={(e) => setTeacherAmount(e.target.value)}
+              className={inputClass}
+            />
+          </div>
+        </div>
+      ) : (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-600">Ставка преподавателя, ₽</label>
+            <input
+              type="number"
+              value={teacherAmount}
+              onChange={(e) => setTeacherAmount(e.target.value)}
+              className={inputClass}
+            />
+          </div>
+          <p className="self-end pb-1.5 text-xs text-slate-400">
+            Ученик платит ровно эту сумму — студия ничего не добавляет сверху
+          </p>
+        </div>
+      )}
 
       {error && <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
 
