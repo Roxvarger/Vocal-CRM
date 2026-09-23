@@ -32,6 +32,14 @@ const KIND_LABELS: Record<BookingKind, string> = {
   personal: "Персональное",
 };
 
+type CancelInitiator = "studio" | "teacher" | "student";
+
+const INITIATOR_LABELS: Record<CancelInitiator, string> = {
+  studio: "Студия",
+  teacher: "Преподаватель",
+  student: "Ученик",
+};
+
 type Booking = {
   id: string;
   starts_at: string;
@@ -46,6 +54,10 @@ type Booking = {
   subscription_id: string | null;
   personal_rate_id: string | null;
   subject_id: string | null;
+  trial_student_name: string | null;
+  trial_student_contact: string | null;
+  is_paid: boolean;
+  subscription: { is_paid: boolean } | null;
   room: { name: string } | null;
   teacher: { full_name: string } | null;
   student: { full_name: string } | null;
@@ -87,10 +99,12 @@ function formatDateInput(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
+// Короткая дата всегда с годом — так однозначно понятно, о какой неделе речь,
+// даже когда просматриваешь расписание на границе годов.
 function formatShortDate(date: Date): string {
   return `${String(date.getDate()).padStart(2, "0")}.${String(
     date.getMonth() + 1
-  ).padStart(2, "0")}`;
+  ).padStart(2, "0")}.${date.getFullYear()}`;
 }
 
 function formatTime(iso: string): string {
@@ -142,7 +156,9 @@ function bookingLabel(b: Booking): string {
         b.teacher?.full_name ?? "?"
       })`;
     case "trial":
-      return `${b.teacher?.full_name ?? "?"} → ${b.student?.full_name ?? "?"} (пробное)`;
+      return `${b.teacher?.full_name ?? "?"} → ${
+        b.trial_student_name || b.student?.full_name || "?"
+      } (пробное)`;
     case "personal":
       return `${b.teacher?.full_name ?? "?"} → ${b.student?.full_name ?? "?"} (персональное)`;
     default:
@@ -150,26 +166,59 @@ function bookingLabel(b: Booking): string {
   }
 }
 
-// Цвет карточки занятия — по кабинету (чтобы было видно, где какой кабинет,
-// одним взглядом на расписание). Названия кабинетов заданы вами в базе, поэтому
+// Оплата отслеживается для разовых/пробных занятий (своё поле is_paid) и для
+// занятий из абонемента (берём статус оплаты у самого абонемента через связь —
+// как только абонемент отмечают оплаченным в разделе «Оплата занятий» или при
+// выдаче, все его занятия в календаре сразу становятся "оплаченными", без
+// дополнительных действий). Персональные условия и аренда всегда считаются
+// оплаченными и рамкой не подсвечиваются.
+function isPaidForDisplay(b: Booking): boolean | null {
+  if (b.booking_kind === "single" || b.booking_kind === "trial") return b.is_paid;
+  if (b.booking_kind === "subscription") return b.subscription?.is_paid ?? false;
+  return null;
+}
+
+function paymentBadge(b: Booking): { label: string; className: string } | null {
+  const paid = isPaidForDisplay(b);
+  if (paid === null) return null;
+  return paid
+    ? { label: "Оплачено", className: "bg-emerald-100 text-emerald-700" }
+    : { label: "Не оплачено", className: "bg-red-100 text-red-700" };
+}
+
+// Заливка карточки — по кабинету (чтобы было видно, где какой кабинет, одним
+// взглядом на расписание). Названия кабинетов заданы вами в базе, поэтому
 // сравниваем по вхождению подстроки — так это переживёт лёгкие изменения
 // регистра или окончаний в названии.
-function roomColorClasses(roomName: string | null | undefined, isRental: boolean): string {
+function roomFillClasses(roomName: string | null | undefined): string {
   const name = (roomName || "").toLowerCase();
-  let base = "border-slate-200 bg-white text-slate-700";
-  if (name.includes("желт")) {
-    base = "border-amber-200 bg-amber-50 text-amber-800";
-  } else if (name.includes("син")) {
-    base = "border-sky-200 bg-sky-50 text-sky-800";
-  } else if (name.includes("актер") || name.includes("актёр")) {
-    base = "border-pink-200 bg-pink-50 text-pink-800";
-  }
-  // Аренду дополнительно подчёркиваем пунктирной рамкой — цвет кабинета сохраняется,
-  // но видно, что это не обычное занятие студии.
-  if (isRental) {
-    base += " border-dashed border-2 border-purple-300";
-  }
-  return base;
+  if (name.includes("желт")) return "bg-amber-50 text-amber-800";
+  if (name.includes("син")) return "bg-sky-50 text-sky-800";
+  if (name.includes("актер") || name.includes("актёр")) return "bg-pink-50 text-pink-800";
+  return "bg-white text-slate-700";
+}
+
+function roomDefaultBorder(roomName: string | null | undefined): string {
+  const name = (roomName || "").toLowerCase();
+  if (name.includes("желт")) return "border-amber-200";
+  if (name.includes("син")) return "border-sky-200";
+  if (name.includes("актер") || name.includes("актёр")) return "border-pink-200";
+  return "border-slate-200";
+}
+
+// Рамка карточки: если оплата отслеживается для этого занятия — рамка красная
+// (не оплачено) или зелёная (оплачено), это важнее цвета кабинета. Иначе —
+// обычная рамка по кабинету. Аренда дополнительно отмечена пунктиром.
+function cardBorderClasses(b: Booking): string {
+  const paid = isPaidForDisplay(b);
+  const border =
+    paid === null ? roomDefaultBorder(b.room?.name) : paid ? "border-emerald-400" : "border-red-400";
+  const dashed = b.booking_kind === "rental" ? " border-dashed" : "";
+  return `border-2 ${border}${dashed}`;
+}
+
+function bookingCardClasses(b: Booking): string {
+  return `${cardBorderClasses(b)} ${roomFillClasses(b.room?.name)}`;
 }
 
 // ---------- Раскладка "Шкала времени": показывает реальные промежутки между занятиями ----------
@@ -224,6 +273,49 @@ function layoutDayBookings(dayBookings: Booking[]): LaidOutBooking[] {
   });
 }
 
+// ---------- Списание / возврат занятия в абонементе ----------
+// Списываем занятие с абонемента сразу в момент постановки в календарь (чтобы
+// остаток сразу был верным и место не "утекало" в никуда), а возвращаем —
+// если запись отменяется без списания оплаты или удаляется вовсе.
+async function consumeSubscriptionLessons(
+  supabase: ReturnType<typeof createClient>,
+  subscriptionId: string,
+  count: number
+) {
+  const { data } = await supabase
+    .from("subscriptions")
+    .select("lessons_used, lessons_remaining")
+    .eq("id", subscriptionId)
+    .single();
+  if (!data) return;
+  await supabase
+    .from("subscriptions")
+    .update({
+      lessons_used: data.lessons_used + count,
+      lessons_remaining: Math.max(0, data.lessons_remaining - count),
+    })
+    .eq("id", subscriptionId);
+}
+
+async function restoreSubscriptionLesson(
+  supabase: ReturnType<typeof createClient>,
+  subscriptionId: string
+) {
+  const { data } = await supabase
+    .from("subscriptions")
+    .select("lessons_used, lessons_remaining, lessons_total")
+    .eq("id", subscriptionId)
+    .single();
+  if (!data) return;
+  await supabase
+    .from("subscriptions")
+    .update({
+      lessons_used: Math.max(0, data.lessons_used - 1),
+      lessons_remaining: Math.min(data.lessons_total, data.lessons_remaining + 1),
+    })
+    .eq("id", subscriptionId);
+}
+
 const TIMELINE_HOURS = Array.from(
   { length: TIMELINE_END_MIN / 60 - TIMELINE_START_MIN / 60 + 1 },
   (_, i) => TIMELINE_START_MIN / 60 + i
@@ -235,7 +327,13 @@ type ViewMode = "all" | "teacher" | "room";
 type LayoutMode = "list" | "timeline";
 
 type ModalMode =
-  | { kind: "create"; date: Date; initialStart?: string }
+  | {
+      kind: "create";
+      date: Date;
+      initialStart?: string;
+      initialTeacherId?: string;
+      initialRoomId?: string;
+    }
   | { kind: "edit"; booking: Booking };
 
 export default function ScheduleClient({
@@ -246,11 +344,18 @@ export default function ScheduleClient({
   locations: Location[];
 }) {
   const supabase = createClient();
-  const canCreate = currentUser.role === "admin" || currentUser.role === "teacher";
+  // Менеджер работает с расписанием наравне с администратором (заводит, меняет,
+  // отменяет и отмечает занятия проведёнными) — только цены ему недоступны отдельно.
+  const canCreate =
+    currentUser.role === "admin" || currentUser.role === "manager" || currentUser.role === "teacher";
   const isAdmin = currentUser.role === "admin";
-  // Разбивку по преподавателям/кабинетам показываем администратору и менеджеру —
-  // им нужно видеть занятость всей студии, а не только свои записи.
+  // Разбивку по преподавателям/кабинетам, полный список преподавателей и массовую
+  // отмену "по студии" показываем администратору и менеджеру — им нужно видеть
+  // и управлять занятостью всей студии, а не только своими записями.
   const canManageView = currentUser.role === "admin" || currentUser.role === "manager";
+  // Массовую отмену занятий за день может запускать админ, менеджер и сам
+  // преподаватель (только свои занятия).
+  const canBulkCancel = canManageView || currentUser.role === "teacher";
 
   const [locationId, setLocationId] = useState<string>(locations[0]?.id ?? "");
   const [weekStart, setWeekStart] = useState<Date>(() => startOfWeekMonday(new Date()));
@@ -266,6 +371,8 @@ export default function ScheduleClient({
 
   const [modal, setModal] = useState<ModalMode | null>(null);
   const [detailBooking, setDetailBooking] = useState<Booking | null>(null);
+  const [cancelBooking, setCancelBooking] = useState<Booking | null>(null);
+  const [bulkCancelDay, setBulkCancelDay] = useState<Date | null>(null);
 
   // Режим просмотра: всё расписание / по преподавателям / по кабинетам
   const [viewMode, setViewMode] = useState<ViewMode>("all");
@@ -274,12 +381,20 @@ export default function ScheduleClient({
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("list");
 
   const BOOKING_SELECT =
-    "id, starts_at, ends_at, status, booking_kind, rental_client_name, lessons_charge, room_id, teacher_id, student_id, subscription_id, personal_rate_id, subject_id, room:room_id(name), teacher:teacher_id(full_name), student:student_id(full_name), subject:subject_id(name)";
+    "id, starts_at, ends_at, status, booking_kind, rental_client_name, lessons_charge, room_id, teacher_id, student_id, subscription_id, personal_rate_id, subject_id, trial_student_name, trial_student_contact, is_paid, room:room_id(name), teacher:teacher_id(full_name), student:student_id(full_name), subject:subject_id(name), subscription:subscription_id(is_paid)";
 
   const weekDays = useMemo(
     () => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)),
     [weekStart]
   );
+
+  // Если сейчас включён фильтр "по преподавателям"/"по кабинетам" — новая запись
+  // сразу подставляет этот параметр, чтобы не выбирать его повторно вручную.
+  function viewFilterExtra(): { initialTeacherId?: string; initialRoomId?: string } {
+    if (viewMode === "teacher" && viewFilterId) return { initialTeacherId: viewFilterId };
+    if (viewMode === "room" && viewFilterId) return { initialRoomId: viewFilterId };
+    return {};
+  }
 
   // Список офисов может быть пуст на самом первом запуске
   useEffect(() => {
@@ -368,7 +483,7 @@ export default function ScheduleClient({
       .from("bookings")
       .select(BOOKING_SELECT)
       .eq("location_id", locationId)
-      .eq("status", "scheduled")
+      .in("status", ["scheduled", "completed"])
       .gte("starts_at", weekStart.toISOString())
       .lt("starts_at", weekEnd.toISOString())
       .order("starts_at")
@@ -391,26 +506,40 @@ export default function ScheduleClient({
       .from("bookings")
       .select(BOOKING_SELECT)
       .eq("location_id", locationId)
-      .eq("status", "scheduled")
+      .in("status", ["scheduled", "completed"])
       .gte("starts_at", weekStart.toISOString())
       .lt("starts_at", weekEnd.toISOString())
       .order("starts_at");
     setBookings((data as unknown as Booking[]) ?? []);
   }
 
-  async function handleCancel(bookingId: string) {
-    if (!confirm("Отменить эту запись?")) return;
+  // Полное удаление записи (не просто отмена) — только для администратора,
+  // например, чтобы убрать ошибочно внесённую задним числом запись. Если запись
+  // была из абонемента — занятие возвращается в остаток.
+  async function deleteBooking(booking: Booking) {
+    if (!confirm("Удалить эту запись насовсем? Действие нельзя отменить.")) return;
+    const { error } = await supabase.from("bookings").delete().eq("id", booking.id);
+    if (error) {
+      alert("Не удалось удалить запись: " + error.message);
+      return;
+    }
+    if (booking.booking_kind === "subscription" && booking.subscription_id) {
+      await restoreSubscriptionLesson(supabase, booking.subscription_id);
+    }
+    refreshBookings();
+  }
+
+  async function markConducted(bookingId: string) {
     const { error } = await supabase
       .from("bookings")
       .update({
-        status: "cancelled",
-        cancelled_by: currentUser.id,
-        cancelled_at: new Date().toISOString(),
+        status: "completed",
+        conducted_at: new Date().toISOString(),
+        conducted_by: currentUser.id,
       })
       .eq("id", bookingId);
-
     if (error) {
-      alert("Не удалось отменить запись: " + error.message);
+      alert("Не удалось отметить занятие проведённым: " + error.message);
       return;
     }
     refreshBookings();
@@ -544,59 +673,90 @@ export default function ScheduleClient({
           если экран узкий — так все 7 дней всегда видны без прокрутки вбок. */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
         {weekDays.map((day, idx) => {
-          const dayBookings = bookings.filter((b) => {
-            if (!isSameLocalDay(b.starts_at, day)) return false;
+          const allDayBookings = bookings.filter((b) => isSameLocalDay(b.starts_at, day));
+          const dayBookings = allDayBookings.filter((b) => {
             if (viewMode === "teacher" && viewFilterId) return b.teacher_id === viewFilterId;
             if (viewMode === "room" && viewFilterId) return b.room_id === viewFilterId;
             return true;
           });
           return (
             <div key={idx} className="rounded-2xl bg-white p-3 shadow-md">
-              <div className="mb-2 flex items-center justify-between">
+              <div className="mb-2 flex flex-col gap-1.5">
                 <span className="text-sm font-semibold text-slate-700">
                   {WEEKDAY_LABELS[idx]} {formatShortDate(day)}
                 </span>
-                {canCreate && (
-                  <button
-                    onClick={() => setModal({ kind: "create", date: day })}
-                    className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200"
-                    title="Добавить запись"
-                  >
-                    + Добавить
-                  </button>
-                )}
+                <div className="flex flex-wrap gap-1.5">
+                  {canCreate && (
+                    <button
+                      onClick={() => setModal({ kind: "create", date: day, ...viewFilterExtra() })}
+                      className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200"
+                      title="Добавить запись"
+                    >
+                      + Добавить
+                    </button>
+                  )}
+                  {canBulkCancel && (
+                    <button
+                      onClick={() => setBulkCancelDay(day)}
+                      className="rounded-full bg-red-50 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-100"
+                      title="Отменить несколько занятий за этот день"
+                    >
+                      Отменить все
+                    </button>
+                  )}
+                </div>
               </div>
 
               {loadingBookings ? (
                 <p className="text-xs text-slate-400">Загрузка…</p>
-              ) : dayBookings.length === 0 ? (
-                <p className="text-xs text-slate-400">
-                  {viewMode === "room" && viewFilterId ? "Кабинет свободен весь день" : "Нет занятий"}
-                </p>
               ) : layoutMode === "list" ? (
-                <div className="space-y-2">
-                  {dayBookings.map((b) => (
-                    <div
-                      key={b.id}
-                      onClick={() => setDetailBooking(b)}
-                      className={`cursor-pointer rounded-lg border p-2 text-xs transition hover:brightness-95 ${roomColorClasses(
-                        b.room?.name,
-                        b.booking_kind === "rental"
-                      )}`}
-                    >
-                      <div className="flex items-center gap-1 font-medium">
-                        {formatTime(b.starts_at)}–{formatTime(b.ends_at)} · {b.room?.name ?? "?"}
-                        {b.lessons_charge === 2 && (
-                          <span className="rounded bg-white/70 px-1 text-[10px] font-semibold">
-                            ×2
-                          </span>
-                        )}
-                      </div>
-                      <div className="opacity-80">{bookingLabel(b)}</div>
-                    </div>
-                  ))}
-                </div>
+                dayBookings.length === 0 ? (
+                  <p className="text-xs text-slate-400">
+                    {viewMode === "room" && viewFilterId ? "Кабинет свободен весь день" : "Нет занятий"}
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {dayBookings.map((b) => {
+                      const badge = paymentBadge(b);
+                      return (
+                        <div
+                          key={b.id}
+                          onClick={() => setDetailBooking(b)}
+                          className={`cursor-pointer rounded-lg p-2 text-xs transition hover:brightness-95 ${bookingCardClasses(
+                            b
+                          )} ${b.status === "completed" ? "opacity-70 ring-2 ring-offset-1 ring-slate-400" : ""}`}
+                        >
+                          <div className="flex items-center gap-1 font-medium">
+                            {formatTime(b.starts_at)}–{formatTime(b.ends_at)} · {b.room?.name ?? "?"}
+                            {b.lessons_charge === 2 && (
+                              <span className="rounded bg-white/70 px-1 text-[10px] font-semibold">
+                                ×2
+                              </span>
+                            )}
+                            {b.status === "completed" && (
+                              <span className="rounded bg-emerald-600 px-1 text-[10px] font-semibold text-white">
+                                Проведено
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1 opacity-80">
+                            <span>{bookingLabel(b)}</span>
+                            {badge && (
+                              <span className={`rounded px-1 text-[10px] font-semibold ${badge.className}`}>
+                                {badge.label}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )
               ) : (
+                // Шкала времени: показываем сетку часов и кликабельное пустое место
+                // ВСЕГДА, даже если на этот день ещё нет ни одной записи — иначе
+                // при переходе на день без занятий пропадала возможность быстро
+                // добавить запись кликом по нужному времени.
                 <div
                   className="relative pl-9"
                   style={{ height: TIMELINE_HEIGHT }}
@@ -607,11 +767,16 @@ export default function ScheduleClient({
                     const rawMinutes = TIMELINE_START_MIN + y / PX_PER_MIN;
                     const rounded = Math.max(
                       TIMELINE_START_MIN,
-                      Math.min(TIMELINE_END_MIN - 30, Math.round(rawMinutes / 5) * 5)
+                      Math.min(TIMELINE_END_MIN - 30, Math.round(rawMinutes / 10) * 10)
                     );
                     const hh = String(Math.floor(rounded / 60)).padStart(2, "0");
                     const mm = String(rounded % 60).padStart(2, "0");
-                    setModal({ kind: "create", date: day, initialStart: `${hh}:${mm}` });
+                    setModal({
+                      kind: "create",
+                      date: day,
+                      initialStart: `${hh}:${mm}`,
+                      ...viewFilterExtra(),
+                    });
                   }}
                 >
                   {TIMELINE_HOURS.map((hour) => (
@@ -625,35 +790,56 @@ export default function ScheduleClient({
                       </span>
                     </div>
                   ))}
-                  {layoutDayBookings(dayBookings).map(({ booking: b, top, height, laneIndex, laneCount }) => (
-                    <button
-                      key={b.id}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setDetailBooking(b);
-                      }}
-                      title={`${formatTime(b.starts_at)}–${formatTime(b.ends_at)} · ${
-                        b.room?.name ?? "?"
-                      } · ${bookingLabel(b)}`}
-                      className={`absolute overflow-hidden rounded-md border p-1 text-left text-[10px] leading-tight ${roomColorClasses(
-                        b.room?.name,
-                        b.booking_kind === "rental"
-                      )} cursor-pointer hover:brightness-95`}
-                      style={{
-                        top,
-                        height,
-                        left: `${(laneIndex / laneCount) * 100}%`,
-                        width: `calc(${100 / laneCount}% - 3px)`,
-                      }}
-                    >
-                      <div className="font-semibold">
-                        {formatTime(b.starts_at)}–{formatTime(b.ends_at)}
-                        {b.lessons_charge === 2 && " ×2"}
-                      </div>
-                      <div className="truncate">{b.room?.name ?? "?"}</div>
-                      <div className="truncate">{bookingLabel(b)}</div>
-                    </button>
-                  ))}
+                  {dayBookings.length === 0 && (
+                    <p className="pointer-events-none absolute left-2 top-2 text-xs text-slate-300">
+                      {viewMode === "room" && viewFilterId ? "Кабинет свободен весь день" : "Нет занятий"}
+                    </p>
+                  )}
+                  {layoutDayBookings(dayBookings).map(({ booking: b, top, height, laneIndex, laneCount }) => {
+                    const badge = paymentBadge(b);
+                    return (
+                      <button
+                        key={b.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDetailBooking(b);
+                        }}
+                        title={`${formatTime(b.starts_at)}–${formatTime(b.ends_at)} · ${
+                          b.room?.name ?? "?"
+                        } · ${bookingLabel(b)}${b.status === "completed" ? " · проведено" : ""}`}
+                        className={`absolute overflow-hidden rounded-md p-1 text-left text-[10px] leading-tight ${bookingCardClasses(
+                          b
+                        )} ${
+                          b.status === "completed" ? "opacity-70 ring-2 ring-offset-1 ring-slate-400" : ""
+                        } cursor-pointer hover:brightness-95`}
+                        style={{
+                          top,
+                          height,
+                          left: `${(laneIndex / laneCount) * 100}%`,
+                          width: `calc(${100 / laneCount}% - 3px)`,
+                        }}
+                      >
+                        <div className="flex items-center gap-1 font-semibold">
+                          {formatTime(b.starts_at)}–{formatTime(b.ends_at)}
+                          {b.lessons_charge === 2 && " ×2"}
+                          {b.status === "completed" && <span title="Проведено">✔</span>}
+                        </div>
+                        <div className="truncate">{b.room?.name ?? "?"}</div>
+                        <div className="flex items-center gap-1 truncate">
+                          <span className="truncate">{bookingLabel(b)}</span>
+                          {badge && (
+                            <span
+                              className={`rounded px-1 text-[9px] font-semibold ${
+                                b.is_paid ? "bg-emerald-600 text-white" : "bg-red-600 text-white"
+                              }`}
+                            >
+                              {b.is_paid ? "$" : "!"}
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -665,13 +851,22 @@ export default function ScheduleClient({
         <BookingDetailModal
           booking={detailBooking}
           canEdit={canCreate}
+          isAdmin={isAdmin}
           onClose={() => setDetailBooking(null)}
           onEdit={() => {
             setModal({ kind: "edit", booking: detailBooking });
             setDetailBooking(null);
           }}
           onCancel={() => {
-            handleCancel(detailBooking.id);
+            setCancelBooking(detailBooking);
+            setDetailBooking(null);
+          }}
+          onMarkConducted={() => {
+            markConducted(detailBooking.id);
+            setDetailBooking(null);
+          }}
+          onDelete={() => {
+            deleteBooking(detailBooking);
             setDetailBooking(null);
           }}
         />
@@ -683,7 +878,7 @@ export default function ScheduleClient({
           locationId={locationId}
           currentUser={currentUser}
           rooms={rooms}
-          teachers={isAdmin ? teachers : [{ id: currentUser.id, full_name: currentUser.fullName }]}
+          teachers={canManageView ? teachers : [{ id: currentUser.id, full_name: currentUser.fullName }]}
           students={students}
           teacherDefaultRooms={teacherDefaultRooms}
           personalRates={personalRates}
@@ -691,6 +886,33 @@ export default function ScheduleClient({
           onClose={() => setModal(null)}
           onSaved={() => {
             setModal(null);
+            refreshBookings();
+          }}
+        />
+      )}
+
+      {cancelBooking && (
+        <CancelBookingModal
+          booking={cancelBooking}
+          currentUser={currentUser}
+          onClose={() => setCancelBooking(null)}
+          onCancelled={() => {
+            setCancelBooking(null);
+            refreshBookings();
+          }}
+        />
+      )}
+
+      {bulkCancelDay && (
+        <BulkCancelModal
+          day={bulkCancelDay}
+          dayBookings={bookings.filter((b) => isSameLocalDay(b.starts_at, bulkCancelDay))}
+          teachers={teachers}
+          currentUser={currentUser}
+          restrictToSelf={!canManageView}
+          onClose={() => setBulkCancelDay(null)}
+          onCancelled={() => {
+            setBulkCancelDay(null);
             refreshBookings();
           }}
         />
@@ -704,22 +926,39 @@ export default function ScheduleClient({
 function BookingDetailModal({
   booking,
   canEdit,
+  isAdmin,
   onClose,
   onEdit,
   onCancel,
+  onMarkConducted,
+  onDelete,
 }: {
   booking: Booking;
   canEdit: boolean;
+  isAdmin: boolean;
   onClose: () => void;
   onEdit: () => void;
   onCancel: () => void;
+  onMarkConducted: () => void;
+  onDelete: () => void;
 }) {
+  const badge = paymentBadge(booking);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
       <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
-        <h2 className="mb-1 text-lg font-semibold text-slate-800">
-          {KIND_LABELS[booking.booking_kind]}
-        </h2>
+        <div className="mb-1 flex flex-wrap items-center gap-2">
+          <h2 className="text-lg font-semibold text-slate-800">{KIND_LABELS[booking.booking_kind]}</h2>
+          {booking.status === "completed" && (
+            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+              Проведено
+            </span>
+          )}
+          {badge && (
+            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${badge.className}`}>
+              {badge.label}
+            </span>
+          )}
+        </div>
         <p className="mb-4 text-sm text-slate-500">
           {formatShortDate(new Date(booking.starts_at))}, {formatTime(booking.starts_at)}–
           {formatTime(booking.ends_at)}
@@ -738,6 +977,19 @@ function BookingDetailModal({
               <span className="text-slate-400">Клиент: </span>
               {booking.rental_client_name || "не указан"}
             </p>
+          ) : booking.booking_kind === "trial" && !booking.student ? (
+            <>
+              <p>
+                <span className="text-slate-400">Ученик (пробное): </span>
+                {booking.trial_student_name || "не указано"}
+              </p>
+              {booking.trial_student_contact && (
+                <p>
+                  <span className="text-slate-400">Контакты: </span>
+                  {booking.trial_student_contact}
+                </p>
+              )}
+            </>
           ) : (
             <p>
               <span className="text-slate-400">Обучающийся: </span>
@@ -752,13 +1004,21 @@ function BookingDetailModal({
           )}
         </div>
 
-        <div className="mt-5 flex gap-2">
+        <div className="mt-5 flex flex-wrap gap-2">
           <button
             onClick={onClose}
             className="flex-1 rounded-lg border border-slate-300 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
           >
             Закрыть
           </button>
+          {canEdit && booking.status === "scheduled" && (
+            <button
+              onClick={onMarkConducted}
+              className="flex-1 rounded-lg border border-emerald-300 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50"
+            >
+              Отметить проведённым
+            </button>
+          )}
           {canEdit && (
             <>
               <button
@@ -775,6 +1035,352 @@ function BookingDetailModal({
               </button>
             </>
           )}
+          {isAdmin && (
+            <button
+              onClick={onDelete}
+              className="w-full rounded-lg border border-red-200 py-2 text-xs font-medium text-red-500 hover:bg-red-50"
+              title="Полностью удалить запись из базы — например, если внесена ошибочно"
+            >
+              Удалить запись насовсем
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Отмена одного занятия — с причиной, инициатором и списанием оплаты ----------
+
+function CancelBookingModal({
+  booking,
+  currentUser,
+  onClose,
+  onCancelled,
+}: {
+  booking: Booking;
+  currentUser: CurrentUser;
+  onClose: () => void;
+  onCancelled: () => void;
+}) {
+  const supabase = createClient();
+  // Отмену "от имени студии" может оформить только админ или менеджер — это
+  // административное решение. Преподаватель может отменить от своего имени или
+  // указать, что отменил ученик, но не может отменить "от имени студии".
+  const canChooseStudio = currentUser.role === "admin" || currentUser.role === "manager";
+  const availableInitiators: CancelInitiator[] = canChooseStudio
+    ? ["studio", "teacher", "student"]
+    : ["teacher", "student"];
+  const [initiator, setInitiator] = useState<CancelInitiator>(canChooseStudio ? "studio" : "teacher");
+  const [reason, setReason] = useState("");
+  // По умолчанию: если отменяет студия или преподаватель — оплата НЕ списывается;
+  // если отменяет сам ученик — по умолчанию списывается (обычная практика студии),
+  // но администратор всегда может поменять галочку вручную.
+  const [charged, setCharged] = useState(false);
+  const [notified, setNotified] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function selectInitiator(next: CancelInitiator) {
+    setInitiator(next);
+    setCharged(next === "student");
+  }
+
+  async function handleSubmit() {
+    setError(null);
+    if (initiator === "teacher" && !notified) {
+      setError("Отметьте, что ученик уведомлён об отмене");
+      return;
+    }
+    setSubmitting(true);
+    const { error: updateError } = await supabase
+      .from("bookings")
+      .update({
+        status: "cancelled",
+        cancelled_by: currentUser.id,
+        cancelled_at: new Date().toISOString(),
+        cancelled_by_type: initiator,
+        cancellation_reason: reason.trim() || null,
+        cancellation_charged: charged,
+        student_notified: notified,
+      })
+      .eq("id", booking.id);
+    if (updateError) {
+      setSubmitting(false);
+      setError(updateError.message);
+      return;
+    }
+    // Если занятие не списывается (оплата/занятие не удерживается) — возвращаем
+    // его в остаток абонемента, откуда оно было списано при постановке в календарь.
+    if (!charged && booking.booking_kind === "subscription" && booking.subscription_id) {
+      await restoreSubscriptionLesson(supabase, booking.subscription_id);
+    }
+    setSubmitting(false);
+    onCancelled();
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
+        <h2 className="mb-1 text-lg font-semibold text-slate-800">Отмена занятия</h2>
+        <p className="mb-4 text-sm text-slate-500">
+          {formatShortDate(new Date(booking.starts_at))}, {formatTime(booking.starts_at)}–
+          {formatTime(booking.ends_at)}
+        </p>
+
+        <div className="mb-3">
+          <label className="mb-1 block text-xs font-medium text-slate-600">Инициатор отмены</label>
+          <div className="flex flex-col gap-1.5 text-sm">
+            {availableInitiators.map((key) => (
+              <label key={key} className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  checked={initiator === key}
+                  onChange={() => selectInitiator(key)}
+                />
+                {INITIATOR_LABELS[key]}
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div className="mb-3">
+          <label className="mb-1 block text-xs font-medium text-slate-600">Причина отмены</label>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={2}
+            className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+            placeholder="Необязательно"
+          />
+        </div>
+
+        <label className="mb-3 flex items-center gap-2 text-sm text-slate-600">
+          <input type="checkbox" checked={charged} onChange={(e) => setCharged(e.target.checked)} />
+          Списывать оплату / занятие абонемента
+        </label>
+
+        {initiator === "teacher" && (
+          <label className="mb-3 flex items-center gap-2 text-sm text-slate-600">
+            <input type="checkbox" checked={notified} onChange={(e) => setNotified(e.target.checked)} />
+            Ученик уведомлён об отмене
+          </label>
+        )}
+
+        {error && <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
+
+        <div className="flex gap-2">
+          <button
+            onClick={onClose}
+            className="flex-1 rounded-lg border border-slate-300 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+          >
+            Назад
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={submitting}
+            className="flex-1 rounded-lg bg-red-600 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60"
+          >
+            {submitting ? "Отменяем…" : "Подтвердить отмену"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Массовая отмена занятий за день (болезнь преподавателя / закрытие студии) ----------
+
+function BulkCancelModal({
+  day,
+  dayBookings,
+  teachers,
+  currentUser,
+  restrictToSelf,
+  onClose,
+  onCancelled,
+}: {
+  day: Date;
+  dayBookings: Booking[];
+  teachers: PersonOption[];
+  currentUser: CurrentUser;
+  // Преподаватель (не админ/менеджер) видит и может отменить только свои занятия —
+  // без выбора "вся студия" и без выбора другого преподавателя.
+  restrictToSelf: boolean;
+  onClose: () => void;
+  onCancelled: () => void;
+}) {
+  const supabase = createClient();
+  const teacherOptions = restrictToSelf
+    ? [{ id: currentUser.id, full_name: currentUser.fullName }]
+    : teachers;
+
+  const [scope, setScope] = useState<"teacher" | "all">("teacher");
+  const [teacherId, setTeacherId] = useState(restrictToSelf ? currentUser.id : teacherOptions[0]?.id ?? "");
+  const [reason, setReason] = useState("");
+  // Массовая отмена всегда инициируется студией или преподавателем — по умолчанию
+  // оплата/занятие абонемента НЕ списывается, но можно включить вручную.
+  const [charged, setCharged] = useState(false);
+  const [rows, setRows] = useState<Record<string, { include: boolean; notified: boolean }>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const scoped = dayBookings.filter((b) => (scope === "teacher" ? b.teacher_id === teacherId : true));
+
+  useEffect(() => {
+    setRows((prev) => {
+      const next: Record<string, { include: boolean; notified: boolean }> = {};
+      scoped.forEach((b) => {
+        next[b.id] = prev[b.id] ?? { include: true, notified: false };
+      });
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope, teacherId, dayBookings.length]);
+
+  function toggleRow(id: string, key: "include" | "notified") {
+    setRows((prev) => ({ ...prev, [id]: { ...prev[id], [key]: !prev[id]?.[key] } }));
+  }
+
+  async function handleSubmit() {
+    const selected = scoped.filter((b) => rows[b.id]?.include);
+    if (selected.length === 0) {
+      setError("Отметьте хотя бы одно занятие для отмены");
+      return;
+    }
+    setError(null);
+    setSubmitting(true);
+    const cancelledByType: CancelInitiator = scope === "teacher" ? "teacher" : "studio";
+    const results = await Promise.all(
+      selected.map((b) =>
+        supabase
+          .from("bookings")
+          .update({
+            status: "cancelled",
+            cancelled_by: currentUser.id,
+            cancelled_at: new Date().toISOString(),
+            cancelled_by_type: cancelledByType,
+            cancellation_reason: reason.trim() || null,
+            cancellation_charged: charged,
+            student_notified: rows[b.id]?.notified ?? false,
+          })
+          .eq("id", b.id)
+      )
+    );
+    const failed = results.find((r) => r.error);
+    if (failed?.error) {
+      setSubmitting(false);
+      setError("Не удалось отменить часть занятий: " + failed.error.message);
+      return;
+    }
+    // Возвращаем занятия в остаток абонемента для тех записей, где оплата не списывается.
+    if (!charged) {
+      const subsToRestore = selected
+        .filter((b) => b.booking_kind === "subscription" && b.subscription_id)
+        .map((b) => b.subscription_id as string);
+      await Promise.all(subsToRestore.map((id) => restoreSubscriptionLesson(supabase, id)));
+    }
+    setSubmitting(false);
+    onCancelled();
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
+        <h2 className="mb-1 text-lg font-semibold text-slate-800">Массовая отмена занятий</h2>
+        <p className="mb-4 text-sm text-slate-500">{formatShortDate(day)}</p>
+
+        {!restrictToSelf && (
+          <div className="mb-3 flex flex-col gap-2 text-sm">
+            <label className="flex items-center gap-2">
+              <input type="radio" checked={scope === "teacher"} onChange={() => setScope("teacher")} />
+              Заболел конкретный преподаватель
+            </label>
+            {scope === "teacher" && (
+              <select
+                value={teacherId}
+                onChange={(e) => setTeacherId(e.target.value)}
+                className="ml-6 rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+              >
+                {teacherOptions.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.full_name}
+                  </option>
+                ))}
+              </select>
+            )}
+            <label className="flex items-center gap-2">
+              <input type="radio" checked={scope === "all"} onChange={() => setScope("all")} />
+              Студия закрыта — отменить все занятия у всех преподавателей
+            </label>
+          </div>
+        )}
+
+        {scoped.length === 0 ? (
+          <p className="mb-3 text-sm text-slate-400">Нет занятий, подходящих под выбранные условия</p>
+        ) : (
+          <div className="mb-3 max-h-56 space-y-1.5 overflow-y-auto rounded-lg border border-slate-100 p-2">
+            {scoped.map((b) => (
+              <div
+                key={b.id}
+                className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-2 py-1.5 text-xs"
+              >
+                <label className="flex flex-1 items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={rows[b.id]?.include ?? true}
+                    onChange={() => toggleRow(b.id, "include")}
+                  />
+                  <span>
+                    {formatTime(b.starts_at)} · {b.teacher?.full_name ?? "?"} →{" "}
+                    {b.trial_student_name || b.student?.full_name || b.rental_client_name || "?"}
+                  </span>
+                </label>
+                <label className="flex items-center gap-1 whitespace-nowrap text-slate-500">
+                  <input
+                    type="checkbox"
+                    checked={rows[b.id]?.notified ?? false}
+                    onChange={() => toggleRow(b.id, "notified")}
+                  />
+                  Уведомлён
+                </label>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="mb-3">
+          <label className="mb-1 block text-xs font-medium text-slate-600">Причина отмены</label>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={2}
+            className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+            placeholder="Например: болезнь преподавателя, закрытие студии"
+          />
+        </div>
+
+        <label className="mb-4 flex items-center gap-2 text-sm text-slate-600">
+          <input type="checkbox" checked={charged} onChange={(e) => setCharged(e.target.checked)} />
+          Списывать оплату / занятие абонемента за эти отмены
+        </label>
+
+        {error && <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
+
+        <div className="flex gap-2">
+          <button
+            onClick={onClose}
+            className="flex-1 rounded-lg border border-slate-300 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+          >
+            Отмена
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={submitting || scoped.length === 0}
+            className="flex-1 rounded-lg bg-red-600 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60"
+          >
+            {submitting ? "Отменяем…" : "Отменить занятия"}
+          </button>
         </div>
       </div>
     </div>
@@ -809,22 +1415,38 @@ function BookingModal({
   onSaved: () => void;
 }) {
   const supabase = createClient();
-  const isAdmin = currentUser.role === "admin";
+  // Полный выбор преподавателя доступен админу и менеджеру — им нужно записывать
+  // учеников к любому преподавателю. Сам преподаватель может добавить занятие
+  // только себе (список teachers, пришедший сюда, для него и так содержит только его).
+  const isStaff = currentUser.role === "admin" || currentUser.role === "manager";
   const isEdit = mode.kind === "edit";
   const day = isEdit ? new Date(mode.booking.starts_at) : mode.date;
 
   const initialTeacherId = isEdit
     ? mode.booking.teacher_id ?? ""
-    : isAdmin
+    : mode.initialTeacherId
+    ? mode.initialTeacherId
+    : isStaff
     ? teachers[0]?.id ?? ""
     : currentUser.id;
 
   const [teacherId, setTeacherId] = useState(initialTeacherId);
   const [roomId, setRoomId] = useState(
-    isEdit ? mode.booking.room_id ?? "" : teacherDefaultRooms[initialTeacherId] ?? rooms[0]?.id ?? ""
+    isEdit
+      ? mode.booking.room_id ?? ""
+      : mode.initialRoomId
+      ? mode.initialRoomId
+      : teacherDefaultRooms[initialTeacherId] ?? rooms[0]?.id ?? ""
   );
-  const [studentId, setStudentId] = useState(
-    isEdit ? mode.booking.student_id ?? "" : students[0]?.id ?? ""
+  // Обучающегося сознательно оставляем пустым по умолчанию для новой записи —
+  // чтобы администратор не забыл выбрать нужного ученика, форма покажет ошибку,
+  // если оставить поле пустым.
+  const [studentId, setStudentId] = useState(isEdit ? mode.booking.student_id ?? "" : "");
+  const [trialStudentName, setTrialStudentName] = useState(
+    isEdit ? mode.booking.trial_student_name ?? "" : ""
+  );
+  const [trialStudentContact, setTrialStudentContact] = useState(
+    isEdit ? mode.booking.trial_student_contact ?? "" : ""
   );
   const [subjectId, setSubjectId] = useState(isEdit ? mode.booking.subject_id ?? "" : "");
 
@@ -839,6 +1461,10 @@ function BookingModal({
   const [startTime, setStartTime] = useState(
     isEdit ? formatTime(mode.booking.starts_at) : mode.initialStart ?? "10:00"
   );
+  // При изменении записи можно поменять только дату/время, преподавателя и кабинет —
+  // тип занятия, ученика и направление трогать нельзя (если это нужно поменять,
+  // запись отменяют и заводят заново).
+  const [editDate, setEditDate] = useState(isEdit ? formatDateInput(day) : "");
   const initialEditDuration = isEdit
     ? Math.round(
         (new Date(mode.booking.ends_at).getTime() - new Date(mode.booking.starts_at).getTime()) / 60000
@@ -869,9 +1495,10 @@ function BookingModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teacherId]);
 
-  // Активные абонементы выбранного обучающегося — чтобы понять, доступен ли пункт "Из абонемента"
+  // Активные абонементы выбранного обучающегося — чтобы понять, доступен ли пункт "Из абонемента".
+  // При изменении записи тип занятия не меняется, поэтому абонементы вообще не нужны.
   useEffect(() => {
-    if (!studentId || kind === "rental") {
+    if (isEdit || !studentId || kind === "rental" || kind === "trial") {
       setStudentSubs([]);
       return;
     }
@@ -906,8 +1533,9 @@ function BookingModal({
   const studentPersonalRate = personalRates.find((r) => r.student_id === studentId);
 
   useEffect(() => {
+    if (isEdit) return; // при изменении записи тип занятия не пересчитываем
     setKind((prev) => {
-      if (prev === "rental") return prev;
+      if (prev === "rental" || prev === "trial") return prev;
       if (studentPersonalRate) return "personal";
       if (prev === "personal") return "single";
       return prev;
@@ -923,50 +1551,35 @@ function BookingModal({
       setError("Заполните все поля");
       return;
     }
-    if (kind !== "rental" && !studentId) {
-      setError("Выберите обучающегося");
-      return;
-    }
-    if (!subjectId) {
-      setError("Выберите направление занятия");
-      return;
-    }
-    if (kind === "subscription" && (!subscriptionId || studentSubs.length === 0)) {
-      setError("У обучающегося нет активного абонемента — выберите другой тип занятия");
-      return;
-    }
-    if (kind === "personal" && !studentPersonalRate) {
-      setError("У этого обучающегося больше нет персональных условий — обновите страницу");
-      return;
-    }
 
-    const baseFields = {
-      location_id: locationId,
-      room_id: roomId,
-      teacher_id: teacherId,
-      student_id: kind === "rental" ? null : studentId,
-      subscription_id: kind === "subscription" ? subscriptionId : null,
-      subject_id: subjectId || null,
-      booking_kind: kind,
-      is_single_lesson: kind !== "subscription" && kind !== "rental",
-      is_rental: kind === "rental",
-      rental_client_name: kind === "rental" ? rentalClientName || null : null,
-      personal_rate_id: kind === "personal" ? studentPersonalRate?.id ?? null : null,
-      single_lesson_price: null as number | null,
-      lessons_charge: 1,
-      created_by: currentUser.id,
-    };
-
-    setSubmitting(true);
-
+    // Изменение записи: разрешаем менять только дату/время, преподавателя и кабинет.
+    // Тип занятия, ученика, направление и прочее трогать нельзя — их значения
+    // остаются такими, какими были при создании записи.
     if (isEdit) {
-      const dateStr = formatDateInput(day);
-      const startsAt = new Date(`${dateStr}T${startTime}:00`);
+      if (!editDate) {
+        setError("Укажите дату");
+        return;
+      }
+      const startsAt = new Date(`${editDate}T${startTime}:00`);
       const endsAt = new Date(startsAt.getTime() + editDuration * 60 * 1000);
+
+      // Переносить запись на дату/время в прошлом может только администратор —
+      // это уже фактически "задним числом", как и создание новой записи в прошлом.
+      if (startsAt.getTime() < Date.now() && currentUser.role !== "admin") {
+        setError("Переносить занятие на дату в прошлом может только администратор.");
+        return;
+      }
+
+      setSubmitting(true);
 
       const { error: updateError } = await supabase
         .from("bookings")
-        .update({ ...baseFields, starts_at: startsAt.toISOString(), ends_at: endsAt.toISOString() })
+        .update({
+          room_id: roomId,
+          teacher_id: teacherId,
+          starts_at: startsAt.toISOString(),
+          ends_at: endsAt.toISOString(),
+        })
         .eq("id", mode.booking.id);
 
       setSubmitting(false);
@@ -982,6 +1595,70 @@ function BookingModal({
       return;
     }
 
+    if (kind === "trial") {
+      if (!trialStudentName.trim()) {
+        setError("Укажите имя ученика для пробного занятия");
+        return;
+      }
+    } else if (kind !== "rental" && !studentId) {
+      setError("Выберите обучающегося");
+      return;
+    }
+    if (!subjectId) {
+      setError("Выберите направление занятия");
+      return;
+    }
+    const chosenSubscription = studentSubs.find((s) => s.id === subscriptionId);
+    if (kind === "subscription" && (!subscriptionId || !chosenSubscription)) {
+      setError("У обучающегося нет активного абонемента — выберите другой тип занятия");
+      return;
+    }
+    if (kind === "subscription" && chosenSubscription && lessonCount > chosenSubscription.lessons_remaining) {
+      setError(
+        `В выбранном абонементе осталось ${chosenSubscription.lessons_remaining} занятий — уменьшите количество или выберите другой абонемент.`
+      );
+      return;
+    }
+    if (kind === "personal" && !studentPersonalRate) {
+      setError("У этого обучающегося больше нет персональных условий — обновите страницу");
+      return;
+    }
+
+    // Добавлять записи задним числом (в прошлом) может только администратор.
+    const dateStrCheck = formatDateInput(day);
+    const firstStartsAt = new Date(`${dateStrCheck}T${startTime}:00`);
+    if (firstStartsAt.getTime() < Date.now() && currentUser.role !== "admin") {
+      setError("Добавлять занятия задним числом может только администратор.");
+      return;
+    }
+
+    // Абонемент, персональные условия и аренда считаются оплаченными автоматически.
+    // Разовое и пробное занятие по умолчанию НЕ оплачены — отметка ставится позже,
+    // в разделе «Оплата занятий».
+    const autoPaidKind = kind === "subscription" || kind === "personal" || kind === "rental";
+
+    const baseFields = {
+      location_id: locationId,
+      room_id: roomId,
+      teacher_id: teacherId,
+      student_id: kind === "rental" || kind === "trial" ? null : studentId,
+      subscription_id: kind === "subscription" ? subscriptionId : null,
+      subject_id: subjectId || null,
+      booking_kind: kind,
+      is_single_lesson: kind !== "subscription" && kind !== "rental",
+      is_rental: kind === "rental",
+      rental_client_name: kind === "rental" ? rentalClientName || null : null,
+      trial_student_name: kind === "trial" ? trialStudentName.trim() || null : null,
+      trial_student_contact: kind === "trial" ? trialStudentContact.trim() || null : null,
+      personal_rate_id: kind === "personal" ? studentPersonalRate?.id ?? null : null,
+      single_lesson_price: null as number | null,
+      lessons_charge: 1,
+      created_by: currentUser.id,
+      is_paid: autoPaidKind,
+    };
+
+    setSubmitting(true);
+
     const dateStr = formatDateInput(day);
     const rows = Array.from({ length: lessonCount }, (_, i) => {
       const startsAt = new Date(`${dateStr}T${startTime}:00`);
@@ -992,8 +1669,8 @@ function BookingModal({
 
     const { error: insertError } = await supabase.from("bookings").insert(rows);
 
-    setSubmitting(false);
     if (insertError) {
+      setSubmitting(false);
       setError(
         insertError.code === "23P01"
           ? "Это время уже занято — преподаватель, кабинет или обучающийся заняты в этот промежуток."
@@ -1003,6 +1680,13 @@ function BookingModal({
       );
       return;
     }
+
+    // Списываем занятия с абонемента сразу при постановке в календарь.
+    if (kind === "subscription" && subscriptionId) {
+      await consumeSubscriptionLessons(supabase, subscriptionId, lessonCount);
+    }
+
+    setSubmitting(false);
     onSaved();
   }
 
@@ -1010,15 +1694,35 @@ function BookingModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
       <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
         <h2 className="mb-4 text-lg font-semibold text-slate-800">
-          {isEdit ? "Изменить запись" : "Новая запись"} — {formatShortDate(day)}
+          {isEdit ? "Изменить запись" : "Новая запись"} —{" "}
+          {isEdit && editDate ? formatShortDate(new Date(`${editDate}T00:00:00`)) : formatShortDate(day)}
         </h2>
+        {isEdit && (
+          <p className="mb-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+            Здесь можно поменять только дату/время, преподавателя и кабинет. Чтобы изменить тип
+            занятия, ученика или направление — отмените эту запись и создайте новую.
+          </p>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-3">
-          <div className={`grid gap-3 ${isEdit ? "grid-cols-2" : "grid-cols-3"}`}>
+          <div className="grid grid-cols-3 gap-3">
+            {isEdit && (
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">Дата</label>
+                <input
+                  type="date"
+                  value={editDate}
+                  onChange={(e) => setEditDate(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                  required
+                />
+              </div>
+            )}
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-600">Начало</label>
               <input
                 type="time"
+                step={600}
                 value={startTime}
                 onChange={(e) => setStartTime(e.target.value)}
                 className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
@@ -1079,7 +1783,7 @@ function BookingModal({
             <select
               value={teacherId}
               onChange={(e) => setTeacherId(e.target.value)}
-              disabled={!isAdmin}
+              disabled={!isStaff}
               className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm disabled:bg-slate-100"
               required
             >
@@ -1108,116 +1812,166 @@ function BookingModal({
             </select>
           </div>
 
-          {kind === "rental" ? (
-            <div>
-              <label className="mb-1 block text-xs font-medium text-slate-600">
-                Имя клиента (необязательно)
-              </label>
-              <input
-                type="text"
-                value={rentalClientName}
-                onChange={(e) => setRentalClientName(e.target.value)}
-                placeholder="Личный ученик преподавателя"
-                className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-              />
+          {isEdit ? (
+            <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-500">
+              <p className="mb-1 font-medium text-slate-600">{KIND_LABELS[mode.booking.booking_kind]}</p>
+              <p>
+                {mode.booking.booking_kind === "rental"
+                  ? mode.booking.rental_client_name || "Клиент не указан"
+                  : mode.booking.booking_kind === "trial"
+                  ? mode.booking.trial_student_name || "Пробное занятие"
+                  : mode.booking.student?.full_name ?? "?"}
+                {mode.booking.subject?.name && ` · ${mode.booking.subject.name}`}
+              </p>
             </div>
           ) : (
-            <div>
-              <label className="mb-1 block text-xs font-medium text-slate-600">Обучающийся</label>
-              <select
-                value={studentId}
-                onChange={(e) => setStudentId(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-                required
-              >
-                {students.length === 0 && <option value="">Нет учеников в системе</option>}
-                {students.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.full_name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-600">Направление</label>
-            <select
-              value={subjectId}
-              onChange={(e) => setSubjectId(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-              required
-            >
-              <option value="" disabled>
-                {subjects.length === 0 ? "Нет направлений в справочнике" : "Выберите направление"}
-              </option>
-              {subjects.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {kind !== "rental" && studentPersonalRate ? (
-            <p className="rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-700">
-              Тип занятия: <strong>Персональное</strong> — у этого обучающегося персональные условия,
-              назначенные администратором. Чтобы поставить другой тип, сначала снимите с него
-              персональные условия в справочнике.
-            </p>
-          ) : (
-            <div>
-              <label className="mb-1 block text-xs font-medium text-slate-600">Тип занятия</label>
-              <div className="flex flex-col gap-1.5 text-sm">
-                <label
-                  className={`flex items-center gap-2 ${!subscriptionAvailable ? "text-slate-300" : ""}`}
-                >
+            <>
+              {kind === "rental" ? (
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-600">
+                    Имя клиента (необязательно)
+                  </label>
                   <input
-                    type="radio"
-                    checked={kind === "subscription"}
-                    disabled={!subscriptionAvailable}
-                    onChange={() => setKind("subscription")}
+                    type="text"
+                    value={rentalClientName}
+                    onChange={(e) => setRentalClientName(e.target.value)}
+                    placeholder="Личный ученик преподавателя"
+                    className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
                   />
-                  Из абонемента {!subscriptionAvailable && "(нет активного абонемента)"}
-                </label>
-                <label className="flex items-center gap-2">
-                  <input type="radio" checked={kind === "single"} onChange={() => setKind("single")} />
-                  Разовое занятие
-                </label>
-                <label className="flex items-center gap-2">
-                  <input type="radio" checked={kind === "trial"} onChange={() => setKind("trial")} />
-                  Пробное занятие
-                </label>
-                <label className="flex items-center gap-2">
-                  <input type="radio" checked={kind === "rental"} onChange={() => setKind("rental")} />
-                  Аренда
-                </label>
-              </div>
-            </div>
-          )}
+                </div>
+              ) : kind === "trial" ? (
+                <>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-600">
+                      Имя ученика (пробное занятие)
+                    </label>
+                    <input
+                      type="text"
+                      value={trialStudentName}
+                      onChange={(e) => setTrialStudentName(e.target.value)}
+                      placeholder="Как к нему обращаться"
+                      className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-600">
+                      Контакты ученика (необязательно)
+                    </label>
+                    <input
+                      type="text"
+                      value={trialStudentContact}
+                      onChange={(e) => setTrialStudentContact(e.target.value)}
+                      placeholder="Телефон, VK, Telegram…"
+                      className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                    />
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    Ученика ещё нет в базе — на этом этапе достаточно имени и контакта. Если он придёт
+                    заниматься дальше, заведите его карточку в разделе «Ученики».
+                  </p>
+                </>
+              ) : (
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-600">Обучающийся</label>
+                  <select
+                    value={studentId}
+                    onChange={(e) => setStudentId(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                    required
+                  >
+                    <option value="" disabled>
+                      {students.length === 0 ? "Нет учеников в системе" : "Выберите обучающегося"}
+                    </option>
+                    {students.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.full_name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
-          {kind === "subscription" &&
-            (subscriptionAvailable ? (
               <div>
-                <label className="mb-1 block text-xs font-medium text-slate-600">Абонемент</label>
+                <label className="mb-1 block text-xs font-medium text-slate-600">Направление</label>
                 <select
-                  value={subscriptionId}
-                  onChange={(e) => setSubscriptionId(e.target.value)}
+                  value={subjectId}
+                  onChange={(e) => setSubjectId(e.target.value)}
                   className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                  required
                 >
-                  {studentSubs.map((s) => (
+                  <option value="" disabled>
+                    {subjects.length === 0 ? "Нет направлений в справочнике" : "Выберите направление"}
+                  </option>
+                  {subjects.map((s) => (
                     <option key={s.id} value={s.id}>
-                      {s.plan?.name ?? "Абонемент"} — осталось {s.lessons_remaining} из{" "}
-                      {s.lessons_total}, до {new Date(s.expires_at).toLocaleDateString("ru-RU")}
+                      {s.name}
                     </option>
                   ))}
                 </select>
               </div>
-            ) : (
-              <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
-                У этого обучающегося нет активного абонемента — выберите другой тип занятия.
-              </p>
-            ))}
+
+              {kind !== "rental" && kind !== "trial" && studentPersonalRate ? (
+                <p className="rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-700">
+                  Тип занятия: <strong>Персональное</strong> — у этого обучающегося персональные условия,
+                  назначенные администратором. Чтобы поставить другой тип, сначала снимите с него
+                  персональные условия в справочнике.
+                </p>
+              ) : (
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-600">Тип занятия</label>
+                  <div className="flex flex-col gap-1.5 text-sm">
+                    <label
+                      className={`flex items-center gap-2 ${!subscriptionAvailable ? "text-slate-300" : ""}`}
+                    >
+                      <input
+                        type="radio"
+                        checked={kind === "subscription"}
+                        disabled={!subscriptionAvailable}
+                        onChange={() => setKind("subscription")}
+                      />
+                      Из абонемента {!subscriptionAvailable && "(нет активного абонемента)"}
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input type="radio" checked={kind === "single"} onChange={() => setKind("single")} />
+                      Разовое занятие
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input type="radio" checked={kind === "trial"} onChange={() => setKind("trial")} />
+                      Пробное занятие
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input type="radio" checked={kind === "rental"} onChange={() => setKind("rental")} />
+                      Аренда
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              {kind === "subscription" &&
+                (subscriptionAvailable ? (
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-600">Абонемент</label>
+                    <select
+                      value={subscriptionId}
+                      onChange={(e) => setSubscriptionId(e.target.value)}
+                      className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                    >
+                      {studentSubs.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.plan?.name ?? "Абонемент"} — осталось {s.lessons_remaining} из{" "}
+                          {s.lessons_total}, до {new Date(s.expires_at).toLocaleDateString("ru-RU")}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                    У этого обучающегося нет активного абонемента — выберите другой тип занятия.
+                  </p>
+                ))}
+            </>
+          )}
 
 
           {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
